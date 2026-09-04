@@ -39,11 +39,32 @@ Se você não tiver um Postgres à mão pra testar rapidinho, crie um gratuito e
 
 **Sobre o "grátis":** o plano free do Render "dorme" depois de ~15 min sem acesso — a primeira pessoa que abrir depois disso espera uns 30–50s o serviço acordar. As próximas pessoas entram na hora. O Postgres do Neon não some nesse meio tempo, ele só hiberna o processamento e acorda sozinho quando alguém consulta — suas mensagens continuam salvas.
 
+## Executável desktop
+
+`desktop/` é um app Electron que só abre uma janela nativa apontando pro Concord — a mesma estratégia do Discord de verdade (o cliente deles também é basicamente um navegador dedicado). Ele não roda servidor nenhum localmente; conversa com o mesmo backend publicado no Render.
+
+```bash
+cd desktop
+npm install
+npm start
+```
+
+Antes de gerar o instalador de verdade, edite `desktop/config.json` e troque `http://localhost:5000` pela URL publicada no Render — sem isso, o `.exe` só funcionaria na sua própria máquina com o servidor local rodando.
+
+Pra gerar o instalador Windows (`.exe`):
+
+```bash
+npm run dist
+```
+
+O instalador sai em `desktop/dist/`. Câmera/microfone são liberados automaticamente (é sempre o nosso próprio site); compartilhar tela usa o seletor nativo do Windows quando disponível.
+
 ## Estrutura
 
 ```
-server/   API + WebSocket (Express, Socket.io, Postgres)
-web/      Front (React + Vite)
+server/    API + WebSocket (Express, Socket.io, Postgres)
+web/       Front (React + Vite)
+desktop/   Cliente desktop (Electron)
 ```
 
-Em produção o `server` serve o build do `web` — um serviço só, um deploy só.
+Em produção o `server` serve o build do `web` — um serviço só, um deploy só. O desktop aponta pra essa mesma URL publicada.
