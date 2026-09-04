@@ -4,17 +4,29 @@ Um servidor "Geral" único: chat de texto persistente, chamada de voz/vídeo em 
 
 ## O que já funciona
 
-- Entrar com um apelido (fica salvo no navegador, sem senha por enquanto)
+- **Conta com apelido + senha:** primeira vez com um apelido, a senha digitada vira a senha da conta; da próxima vez, precisa da senha certa pra voltar com aquele nome (veja "Contas" abaixo)
 - Chat em tempo real no canal `#geral`, com histórico salvo em Postgres — fecha o navegador, entra de novo, as mensagens continuam lá
 - Lista de quem está online, atualizada em tempo real
 - Canal de voz "Geral": qualquer um entra, fala, liga câmera se quiser — todo mundo conectado direto um no outro (WebRTC), sem servidor de mídia pago no meio
-- Compartilhar tela na chamada (renegocia a mesma conexão de voz, sem servidor de mídia)
+- Supressão de ruído por IA (GTCRN) + realce de presença vocal (EQ/compressão), tudo processado no navegador
+- Compartilhar tela na chamada, com tela cheia e volume por pessoa
 - **Moderação básica:** admins podem apagar mensagem de qualquer um, expulsar (temporário) ou banir (permanente) — veja "Definindo quem é admin" abaixo
 - **Anti-spam:** no máximo 5 mensagens a cada 10 segundos por pessoa
 
+## Contas
+
+Login é só **apelido + senha** — sem e-mail, sem verificação. Regras simples:
+
+- Apelido livre → a senha digitada cria a conta
+- Apelido já existente → precisa da senha certa (se errar, é recusado)
+- Apelido de uma conta criada **antes** desse recurso existir (sem senha ainda) → a primeira pessoa que entrar com uma senha "reivindica" o apelido; dali pra frente, só quem sabe essa senha volta com esse nome
+- Depois de entrar, o navegador guarda um token de sessão (não a senha) — reabrir o app não pede senha de novo, a não ser que o servidor reinicie (Render redeploy, por exemplo) ou o token expire
+
+Apelido não diferencia maiúscula/minúscula pra login (`Wesley` e `wesley` são a mesma conta).
+
 ## Definindo quem é admin
 
-Sem sistema de login ainda, "ser admin" é decidido por uma lista de apelidos de confiança na variável de ambiente `ADMIN_NICKNAMES` (separados por vírgula):
+"Ser admin" continua sendo uma lista de apelidos de confiança na variável de ambiente `ADMIN_NICKNAMES` (separados por vírgula) — mas agora que apelido tem dono (senha), só quem sabe a senha da conta consegue de fato entrar com esse nome:
 
 ```
 ADMIN_NICKNAMES=Wesley,OutroAdmin
@@ -26,8 +38,9 @@ Local: coloque isso no `server/.env`. No Render: **Environment** → adicionar e
 
 - **Voz em malha (mesh):** cada participante se conecta direto com todo mundo. Funciona bem até uns 6–8 pessoas na chamada ao mesmo tempo; passando disso, a qualidade cai porque cada um está enviando vídeo/áudio pra todo mundo. Resolver isso é trabalho de uma fase futura (servidor de mídia / SFU).
 - **Sem TURN por padrão:** usa só STUN público (grátis). Funciona na grande maioria das redes domésticas/4G. Se alguém não conseguir conectar a chamada (rede corporativa restrita), configure um TURN gratuito (ex: metered.ca) nas variáveis `VITE_TURN_URL/VITE_TURN_USERNAME/VITE_TURN_CREDENTIAL` do front.
-- **Sem senha ainda:** identidade é só um apelido salvo no navegador. Qualquer um pode digitar o mesmo apelido de um admin e ganhar os poderes dele — `ADMIN_NICKNAMES` é "honra ao mérito", não segurança de verdade. Só vira seguro com login/senha real, que é trabalho futuro.
-- **Ban é best-effort:** como não tem conta de verdade, quem foi banido pode limpar o navegador (ou usar outro) e voltar com identidade nova. Barra o caso comum, não o caso hostil.
+- **Sem e-mail/recuperação de senha:** esqueceu a senha, perde o apelido — não tem "esqueci minha senha" ainda. Pra um grupo pequeno de confiança, ok; pra escala maior, precisaria de recuperação de verdade.
+- **Ban ainda é best-effort:** agora que apelido tem senha, criar uma identidade nova exige escolher um apelido novo (não só limpar o navegador) — mais alto que antes, mas ainda não impede de vez quem realmente quiser voltar com outro nome.
+- **Sessão não sobrevive a restart do servidor:** cada redeploy no Render limpa as sessões em memória — todo mundo precisa digitar a senha de novo (a conta em si não se perde, só a sessão).
 - **Um servidor só, um canal de texto só:** por design, é o escopo deste MVP.
 
 ## Rodando local

@@ -36,6 +36,11 @@ export async function initDb() {
     CREATE INDEX IF NOT EXISTS messages_created_at_idx ON messages (created_at);
   `);
 
+  // adicionada depois que o servidor já tinha usuários sem senha — contas
+  // criadas antes disso ficam com password_hash NULL até alguém "reivindicar"
+  // o apelido com uma senha (ver findUserByNickname/createUser em socket.js).
+  await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;`);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS bans (
       user_id UUID PRIMARY KEY REFERENCES users(id),
@@ -57,13 +62,35 @@ export async function initDb() {
   `);
 }
 
-export async function upsertUser(id, nickname) {
-  await pool.query(
-    `INSERT INTO users (id, nickname)
-     VALUES ($1, $2)
-     ON CONFLICT (id) DO UPDATE SET nickname = $2, last_seen = now()`,
-    [id, nickname]
+export async function findUserByNickname(nickname) {
+  const { rows } = await pool.query(
+    `SELECT id, nickname, password_hash FROM users WHERE LOWER(nickname) = LOWER($1)`,
+    [nickname]
   );
+  return rows[0];
+}
+
+export async function findUserById(id) {
+  const { rows } = await pool.query(
+    `SELECT id, nickname, password_hash FROM users WHERE id = $1`,
+    [id]
+  );
+  return rows[0];
+}
+
+export async function createUser(id, nickname, passwordHash) {
+  await pool.query(
+    `INSERT INTO users (id, nickname, password_hash) VALUES ($1, $2, $3)`,
+    [id, nickname, passwordHash]
+  );
+}
+
+export async function setPasswordHash(id, passwordHash) {
+  await pool.query(`UPDATE users SET password_hash = $1 WHERE id = $2`, [passwordHash, id]);
+}
+
+export async function touchLastSeen(id) {
+  await pool.query(`UPDATE users SET last_seen = now() WHERE id = $1`, [id]);
 }
 
 export async function insertMessage(userId, nickname, content) {

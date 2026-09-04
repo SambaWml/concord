@@ -19,10 +19,18 @@ export async function initDb() {
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
       nickname TEXT NOT NULL,
+      password_hash TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_seen TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+
+  // pra quem já tinha um concord.db local de antes desse recurso existir
+  try {
+    db.exec(`ALTER TABLE users ADD COLUMN password_hash TEXT`);
+  } catch {
+    // coluna já existe (banco criado com a versão de cima, ou migração já rodou)
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -58,11 +66,30 @@ export async function initDb() {
   console.log("[dev] defina DATABASE_URL no .env pra usar Postgres em vez disso");
 }
 
-export async function upsertUser(id, nickname) {
-  db.prepare(
-    `INSERT INTO users (id, nickname) VALUES (?, ?)
-     ON CONFLICT(id) DO UPDATE SET nickname = excluded.nickname, last_seen = datetime('now')`
-  ).run(id, nickname);
+export async function findUserByNickname(nickname) {
+  return db
+    .prepare(`SELECT id, nickname, password_hash FROM users WHERE LOWER(nickname) = LOWER(?)`)
+    .get(nickname);
+}
+
+export async function findUserById(id) {
+  return db.prepare(`SELECT id, nickname, password_hash FROM users WHERE id = ?`).get(id);
+}
+
+export async function createUser(id, nickname, passwordHash) {
+  db.prepare(`INSERT INTO users (id, nickname, password_hash) VALUES (?, ?, ?)`).run(
+    id,
+    nickname,
+    passwordHash
+  );
+}
+
+export async function setPasswordHash(id, passwordHash) {
+  db.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).run(passwordHash, id);
+}
+
+export async function touchLastSeen(id) {
+  db.prepare(`UPDATE users SET last_seen = datetime('now') WHERE id = ?`).run(id);
 }
 
 export async function insertMessage(userId, nickname, content) {

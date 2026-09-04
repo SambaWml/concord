@@ -7,7 +7,11 @@ const impl = process.env.DATABASE_URL
   : await import("./db.sqlite.js");
 
 export const initDb = impl.initDb;
-export const upsertUser = impl.upsertUser;
+export const findUserByNickname = impl.findUserByNickname;
+export const findUserById = impl.findUserById;
+export const createUser = impl.createUser;
+export const setPasswordHash = impl.setPasswordHash;
+export const touchLastSeen = impl.touchLastSeen;
 export const insertMessage = impl.insertMessage;
 export const getRecentMessages = impl.getRecentMessages;
 export const getMessageById = impl.getMessageById;

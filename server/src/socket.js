@@ -1,6 +1,10 @@
 import { v4 as uuidv4 } from "uuid";
 import {
-  upsertUser,
+  findUserByNickname,
+  findUserById,
+  createUser,
+  setPasswordHash,
+  touchLastSeen,
   insertMessage,
   getRecentMessages,
   getMessageById,
@@ -9,16 +13,17 @@ import {
   banUser,
   addAuditLog,
 } from "./db.js";
+import { hashPassword, verifyPassword } from "./auth.js";
 
 const MAX_NICKNAME_LEN = 24;
 const MAX_MESSAGE_LEN = 2000;
+const MIN_PASSWORD_LEN = 4;
 const RATE_LIMIT_MAX = 5; // mensagens...
 const RATE_LIMIT_WINDOW_MS = 10_000; // ...por 10 segundos
 
-// Sem sistema de login de verdade, "admin" aqui é só uma lista de apelidos
-// confiáveis definida por variável de ambiente — qualquer um que digite o
-// mesmo nome passa como admin. É um limite conhecido, ok pra grupo de
-// confiança; virar algo seguro de verdade depende de ter conta com senha.
+// "admin" continua sendo uma lista de apelidos de confiança por variável de
+// ambiente — mas agora que apelido tem dono (nickname + senha), só quem
+// sabe a senha da conta consegue efetivamente entrar com esse nome.
 const ADMIN_NICKNAMES = new Set(
   (process.env.ADMIN_NICKNAMES || "")
     .split(",")
@@ -34,6 +39,9 @@ export function attachSocket(io) {
   // audit log é que precisam sobreviver, e esses vão pro banco.
   const online = new Map(); // socket.id -> { userId, nickname, isAdmin }
   const voiceRoom = new Map(); // socket.id -> { userId, nickname }
+  // Token de sessão em memória — some se o servidor reiniciar, aí a pessoa
+  // só precisa digitar a senha de novo (não perde a conta, só a sessão).
+  const sessions = new Map(); // sessionToken -> { userId, nickname }
 
   const onlineList = () => [...online.values()];
   const voiceRoster = () =>
@@ -50,33 +58,81 @@ export function attachSocket(io) {
   }
 
   io.on("connection", (socket) => {
-    socket.on("auth", async ({ userId, nickname }, ack) => {
+    socket.on("auth", async ({ nickname, password, sessionToken }, ack) => {
       try {
-        const cleanNickname = String(nickname || "")
-          .trim()
-          .slice(0, MAX_NICKNAME_LEN);
-        if (!cleanNickname) {
-          ack?.({ ok: false, error: "Apelido inválido." });
-          return;
-        }
-        const id = userId || uuidv4();
+        let user;
 
-        if (await isBanned(id)) {
+        if (sessionToken) {
+          // reconectando com o token que ganhou no login anterior — sem
+          // precisar digitar a senha de novo, enquanto o servidor não reiniciar
+          const session = sessions.get(sessionToken);
+          user = session && (await findUserById(session.userId));
+          if (!user) {
+            ack?.({ ok: false, error: "Sessão expirada, entra de novo.", needsPassword: true });
+            return;
+          }
+        } else {
+          const cleanNickname = String(nickname || "")
+            .trim()
+            .slice(0, MAX_NICKNAME_LEN);
+          if (!cleanNickname) {
+            ack?.({ ok: false, error: "Apelido inválido." });
+            return;
+          }
+          if (!password || password.length < MIN_PASSWORD_LEN) {
+            ack?.({
+              ok: false,
+              error: `Senha precisa ter pelo menos ${MIN_PASSWORD_LEN} caracteres.`,
+              needsPassword: true,
+            });
+            return;
+          }
+
+          const existing = await findUserByNickname(cleanNickname);
+          if (!existing) {
+            // apelido livre — cria a conta com essa senha
+            const id = uuidv4();
+            await createUser(id, cleanNickname, hashPassword(password));
+            user = { id, nickname: cleanNickname };
+          } else if (!existing.password_hash) {
+            // conta de antes desse recurso existir: quem chegar primeiro
+            // com uma senha passa a ser dono dela dali pra frente
+            await setPasswordHash(existing.id, hashPassword(password));
+            user = existing;
+          } else if (verifyPassword(password, existing.password_hash)) {
+            user = existing;
+          } else {
+            ack?.({ ok: false, error: "Senha incorreta.", needsPassword: true });
+            return;
+          }
+        }
+
+        if (await isBanned(user.id)) {
           ack?.({ ok: false, error: "Você foi banido deste servidor." });
           return;
         }
 
-        await upsertUser(id, cleanNickname);
-        const isAdmin = isAdminNickname(cleanNickname);
+        await touchLastSeen(user.id);
+        const isAdmin = isAdminNickname(user.nickname);
 
-        socket.data.userId = id;
-        socket.data.nickname = cleanNickname;
+        socket.data.userId = user.id;
+        socket.data.nickname = user.nickname;
         socket.data.isAdmin = isAdmin;
         socket.data.messageTimestamps = [];
-        online.set(socket.id, { userId: id, nickname: cleanNickname, isAdmin });
+        online.set(socket.id, { userId: user.id, nickname: user.nickname, isAdmin });
+
+        const newSessionToken = uuidv4();
+        sessions.set(newSessionToken, { userId: user.id, nickname: user.nickname });
 
         const history = await getRecentMessages(50);
-        ack?.({ ok: true, userId: id, isAdmin, history });
+        ack?.({
+          ok: true,
+          userId: user.id,
+          nickname: user.nickname,
+          isAdmin,
+          sessionToken: newSessionToken,
+          history,
+        });
         io.emit("presence:update", onlineList());
       } catch (err) {
         console.error("auth failed", err);

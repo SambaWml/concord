@@ -5,6 +5,7 @@ import Chat from "./components/Chat.jsx";
 import VoicePanel from "./components/VoicePanel.jsx";
 
 const STORAGE_KEY = "concord:identity";
+// guarda { userId, nickname, sessionToken } — nunca a senha.
 
 function loadIdentity() {
   try {
@@ -28,40 +29,45 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [online, setOnline] = useState([]);
 
-  function enter(nickname) {
+  function applyAuthSuccess(res) {
+    const next = { userId: res.userId, nickname: res.nickname, sessionToken: res.sessionToken };
+    saveIdentity(next);
+    setIdentity(next);
+    setIsAdmin(!!res.isAdmin);
+    setMessages(res.history || []);
+    setStatus("online");
     setError("");
-    socket.connect();
-    socket.emit(
-      "auth",
-      { userId: identity?.userId, nickname },
-      (res) => {
-        if (!res?.ok) {
-          setError(res?.error || "Não foi possível entrar.");
-          socket.disconnect();
-          return;
-        }
-        const next = { userId: res.userId, nickname };
-        saveIdentity(next);
-        setIdentity(next);
-        setIsAdmin(!!res.isAdmin);
-        setMessages(res.history || []);
-        setStatus("online");
-      }
-    );
   }
 
-  function forceLogout(reason) {
+  // volta pra tela de login, mantendo o apelido preenchido — usado tanto
+  // pra kick/ban quanto pra quando a sessão salva não vale mais
+  function backToLogin(reason, keepNickname) {
     socket.disconnect();
-    setIdentity(null);
+    setIdentity(keepNickname ? { nickname: keepNickname } : null);
     setIsAdmin(false);
     setMessages([]);
     setOnline([]);
     setError(reason);
   }
 
-  // reconecta sozinho se já tiver identidade salva
+  function enter(nickname, password) {
+    setError("");
+    socket.connect();
+    socket.emit("auth", { nickname, password }, (res) => {
+      if (!res?.ok) {
+        setError(res?.error || "Não foi possível entrar.");
+        socket.disconnect();
+        return;
+      }
+      applyAuthSuccess(res);
+    });
+  }
+
+  // com sessão salva, conecta sozinho — tanto na carga da página quanto em
+  // qualquer reconexão depois de uma queda de rede (o socket.io reconecta
+  // sozinho, mas precisa reautenticar de novo do lado do servidor).
   useEffect(() => {
-    if (identity) enter(identity.nickname);
+    if (identity?.sessionToken) socket.connect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -86,13 +92,20 @@ export default function App() {
       setStatus("offline");
     }
     function onConnect() {
-      if (identity) setStatus("online");
+      if (!identity?.sessionToken) return;
+      socket.emit("auth", { sessionToken: identity.sessionToken }, (res) => {
+        if (!res?.ok) {
+          backToLogin(res?.error || "Sessão expirada, entra de novo.", identity.nickname);
+          return;
+        }
+        applyAuthSuccess(res);
+      });
     }
     function onKicked() {
-      forceLogout("Você foi expulso do servidor.");
+      backToLogin("Você foi expulso do servidor.");
     }
     function onBanned() {
-      forceLogout("Você foi banido deste servidor.");
+      backToLogin("Você foi banido deste servidor.");
     }
 
     socket.on("chat:message", onMessage);
@@ -117,8 +130,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity]);
 
-  if (!identity) {
-    return <Login onEnter={enter} error={error} />;
+  if (!identity?.sessionToken) {
+    return <Login onEnter={enter} error={error} defaultNickname={identity?.nickname} />;
   }
 
   function kick(user) {
