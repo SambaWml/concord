@@ -1,17 +1,27 @@
 # Concord — MVP
 
-Um servidor "Geral" único: chat de texto persistente, chamada de voz/vídeo em grupo com compartilhamento de tela, e moderação básica. Web e executável desktop.
+Múltiplos servidores, cada um com seu próprio chat e chamada de voz/vídeo com compartilhamento de tela — como o Discord, num MVP enxuto. Web e executável desktop.
 
 ## O que já funciona
 
 - **Conta com apelido + senha:** primeira vez com um apelido, a senha digitada vira a senha da conta; da próxima vez, precisa da senha certa pra voltar com aquele nome (veja "Contas" abaixo)
-- Chat em tempo real no canal `#geral`, com histórico salvo em Postgres — fecha o navegador, entra de novo, as mensagens continuam lá
-- Lista de quem está online, atualizada em tempo real
-- Canal de voz "Geral": qualquer um entra, fala, liga câmera se quiser — todo mundo conectado direto um no outro (WebRTC), sem servidor de mídia pago no meio
+- **Múltiplos servidores:** crie o seu (ganha um código de convite na hora) ou entre num com o código de alguém — veja "Servidores" abaixo
+- Chat em tempo real no canal `#geral` de cada servidor, com histórico salvo em Postgres — fecha o navegador, entra de novo, as mensagens continuam lá
+- Lista de quem está online naquele servidor, atualizada em tempo real
+- Canal de voz "Geral" por servidor: qualquer um entra, fala, liga câmera se quiser — todo mundo conectado direto um no outro (WebRTC), sem servidor de mídia pago no meio
 - Supressão de ruído por IA (GTCRN) + realce de presença vocal (EQ/compressão), tudo processado no navegador
 - Compartilhar tela na chamada, com tela cheia e volume por pessoa
-- **Moderação básica:** admins podem apagar mensagem de qualquer um, expulsar (temporário) ou banir (permanente) — veja "Definindo quem é admin" abaixo
+- **Moderação:** o dono de um servidor modera só o que criou; quem está em `ADMIN_NICKNAMES` modera em todos — apagar mensagem, expulsar (temporário) ou banir (permanente, só naquele servidor) — veja "Definindo quem é admin" abaixo
 - **Anti-spam:** no máximo 5 mensagens a cada 10 segundos por pessoa
+
+## Servidores
+
+Cada servidor é isolado: chat, chamada de voz e banimentos não vazam de um pro outro.
+
+- **Criar:** botão "+" embaixo dos ícones de servidor → nome → ganha um código de convite na hora pra compartilhar
+- **Entrar:** mesmo botão "+" → aba "Entrar com convite" → cola o código de 8 caracteres
+- Todo mundo cai automaticamente no servidor **Geral** ao criar a conta — é o servidor padrão da instalação, sem dono definido
+- O botão 👤+ no topo da lista de canais mostra (ou gera) o código de convite do servidor atual
 
 ## Contas
 
@@ -26,7 +36,10 @@ Apelido não diferencia maiúscula/minúscula pra login (`Wesley` e `wesley` sã
 
 ## Definindo quem é admin
 
-"Ser admin" continua sendo uma lista de apelidos de confiança na variável de ambiente `ADMIN_NICKNAMES` (separados por vírgula) — mas agora que apelido tem dono (senha), só quem sabe a senha da conta consegue de fato entrar com esse nome:
+Tem dois níveis:
+
+- **Dono do servidor:** quem cria um servidor modera só ele — kick/ban/apagar mensagem dentro do que criou, automaticamente, sem configurar nada.
+- **Admin global:** lista de apelidos de confiança na variável de ambiente `ADMIN_NICKNAMES` (separados por vírgula) — modera em **qualquer** servidor. Como apelido tem dono (senha), só quem sabe a senha da conta consegue de fato entrar com esse nome:
 
 ```
 ADMIN_NICKNAMES=Wesley,OutroAdmin
@@ -41,7 +54,8 @@ Local: coloque isso no `server/.env`. No Render: **Environment** → adicionar e
 - **Sem e-mail/recuperação de senha:** esqueceu a senha, perde o apelido — não tem "esqueci minha senha" ainda. Pra um grupo pequeno de confiança, ok; pra escala maior, precisaria de recuperação de verdade.
 - **Ban ainda é best-effort:** agora que apelido tem senha, criar uma identidade nova exige escolher um apelido novo (não só limpar o navegador) — mais alto que antes, mas ainda não impede de vez quem realmente quiser voltar com outro nome.
 - **Sessão não sobrevive a restart do servidor:** cada redeploy no Render limpa as sessões em memória — todo mundo precisa digitar a senha de novo (a conta em si não se perde, só a sessão).
-- **Um servidor só, um canal de texto só:** por design, é o escopo deste MVP.
+- **Um canal de texto e um de voz por servidor:** por design, é o escopo deste MVP — múltiplos canais dentro do mesmo servidor fica pra depois.
+- **Convite não expira nem tem limite de usos:** qualquer um com o código entra, pra sempre. Sem revogar convite ainda.
 
 ## Rodando local
 

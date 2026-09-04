@@ -6,16 +6,31 @@ const impl = process.env.DATABASE_URL
   ? await import("./db.postgres.js")
   : await import("./db.sqlite.js");
 
+export const DEFAULT_GUILD_ID = impl.DEFAULT_GUILD_ID;
+
 export const initDb = impl.initDb;
 export const findUserByNickname = impl.findUserByNickname;
 export const findUserById = impl.findUserById;
 export const createUser = impl.createUser;
 export const setPasswordHash = impl.setPasswordHash;
 export const touchLastSeen = impl.touchLastSeen;
+
+export const createGuild = impl.createGuild;
+export const getGuildById = impl.getGuildById;
+export const getGuildsForUser = impl.getGuildsForUser;
+export const isGuildMember = impl.isGuildMember;
+export const addGuildMember = impl.addGuildMember;
+export const removeGuildMember = impl.removeGuildMember;
+
+export const createInvite = impl.createInvite;
+export const getInvite = impl.getInvite;
+export const getInviteForGuild = impl.getInviteForGuild;
+
 export const insertMessage = impl.insertMessage;
 export const getRecentMessages = impl.getRecentMessages;
 export const getMessageById = impl.getMessageById;
 export const deleteMessage = impl.deleteMessage;
+
 export const isBanned = impl.isBanned;
 export const banUser = impl.banUser;
 export const unbanUser = impl.unbanUser;

@@ -14,6 +14,10 @@ const dbPath = path.join(dataDir, "concord.db");
 
 const db = new DatabaseSync(dbPath);
 
+// Todo mundo que já usava o Concord antes de existirem múltiplos servidores
+// continua caindo automaticamente aqui — ver ensureDefaultGuild() abaixo.
+export const DEFAULT_GUILD_ID = "00000000-0000-0000-0000-000000000001";
+
 export async function initDb() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS users (
@@ -33,27 +37,63 @@ export async function initDb() {
   }
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS guilds (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      owner_id TEXT REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS guild_members (
+      guild_id TEXT REFERENCES guilds(id),
+      user_id TEXT REFERENCES users(id),
+      joined_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (guild_id, user_id)
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS invites (
+      code TEXT PRIMARY KEY,
+      guild_id TEXT REFERENCES guilds(id),
+      created_by TEXT REFERENCES users(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT REFERENCES guilds(id),
       user_id TEXT REFERENCES users(id),
       nickname TEXT NOT NULL,
       content TEXT NOT NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+  try {
+    db.exec(`ALTER TABLE messages ADD COLUMN guild_id TEXT REFERENCES guilds(id)`);
+  } catch {
+    // já existe
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS bans (
-      user_id TEXT PRIMARY KEY REFERENCES users(id),
+      user_id TEXT REFERENCES users(id),
+      guild_id TEXT REFERENCES guilds(id),
       banned_by TEXT NOT NULL,
       reason TEXT,
-      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (guild_id, user_id)
     );
   `);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      guild_id TEXT REFERENCES guilds(id),
       actor_nickname TEXT NOT NULL,
       action TEXT NOT NULL,
       target_nickname TEXT,
@@ -62,8 +102,23 @@ export async function initDb() {
     );
   `);
 
+  ensureDefaultGuild();
+
   console.log(`[dev] usando SQLite local em ${dbPath}`);
   console.log("[dev] defina DATABASE_URL no .env pra usar Postgres em vez disso");
+}
+
+// Garante que sempre existe um servidor "Geral" — é onde todo mundo que já
+// usava o Concord antes de servidores múltiplos continua caindo, e é o
+// servidor padrão de qualquer instalação nova.
+function ensureDefaultGuild() {
+  db.prepare(`INSERT OR IGNORE INTO guilds (id, name, owner_id) VALUES (?, 'Geral', NULL)`).run(
+    DEFAULT_GUILD_ID
+  );
+  db.prepare(`UPDATE messages SET guild_id = ? WHERE guild_id IS NULL`).run(DEFAULT_GUILD_ID);
+  db.prepare(
+    `INSERT OR IGNORE INTO guild_members (guild_id, user_id) SELECT ?, id FROM users`
+  ).run(DEFAULT_GUILD_ID);
 }
 
 export async function findUserByNickname(nickname) {
@@ -92,29 +147,92 @@ export async function touchLastSeen(id) {
   db.prepare(`UPDATE users SET last_seen = datetime('now') WHERE id = ?`).run(id);
 }
 
-export async function insertMessage(userId, nickname, content) {
-  const info = db
-    .prepare(`INSERT INTO messages (user_id, nickname, content) VALUES (?, ?, ?)`)
-    .run(userId, nickname, content);
+// --- servidores (guilds) ---
+
+export async function createGuild(id, name, ownerId) {
+  db.prepare(`INSERT INTO guilds (id, name, owner_id) VALUES (?, ?, ?)`).run(id, name, ownerId);
+}
+
+export async function getGuildById(id) {
+  return db.prepare(`SELECT id, name, owner_id FROM guilds WHERE id = ?`).get(id);
+}
+
+export async function getGuildsForUser(userId) {
+  return db
+    .prepare(
+      `SELECT g.id, g.name, g.owner_id
+       FROM guilds g
+       JOIN guild_members gm ON gm.guild_id = g.id
+       WHERE gm.user_id = ?
+       ORDER BY gm.joined_at ASC`
+    )
+    .all(userId);
+}
+
+export async function isGuildMember(guildId, userId) {
   const row = db
-    .prepare(`SELECT id, user_id, nickname, content, created_at FROM messages WHERE id = ?`)
+    .prepare(`SELECT 1 FROM guild_members WHERE guild_id = ? AND user_id = ?`)
+    .get(guildId, userId);
+  return !!row;
+}
+
+export async function addGuildMember(guildId, userId) {
+  db.prepare(`INSERT OR IGNORE INTO guild_members (guild_id, user_id) VALUES (?, ?)`).run(
+    guildId,
+    userId
+  );
+}
+
+export async function removeGuildMember(guildId, userId) {
+  db.prepare(`DELETE FROM guild_members WHERE guild_id = ? AND user_id = ?`).run(guildId, userId);
+}
+
+// --- convites ---
+
+export async function createInvite(code, guildId, createdBy) {
+  db.prepare(`INSERT INTO invites (code, guild_id, created_by) VALUES (?, ?, ?)`).run(
+    code,
+    guildId,
+    createdBy
+  );
+}
+
+export async function getInvite(code) {
+  return db.prepare(`SELECT code, guild_id, created_by FROM invites WHERE code = ?`).get(code);
+}
+
+export async function getInviteForGuild(guildId) {
+  return db
+    .prepare(`SELECT code FROM invites WHERE guild_id = ? ORDER BY created_at ASC LIMIT 1`)
+    .get(guildId);
+}
+
+// --- mensagens (agora por servidor) ---
+
+export async function insertMessage(guildId, userId, nickname, content) {
+  const info = db
+    .prepare(`INSERT INTO messages (guild_id, user_id, nickname, content) VALUES (?, ?, ?, ?)`)
+    .run(guildId, userId, nickname, content);
+  const row = db
+    .prepare(`SELECT id, guild_id, user_id, nickname, content, created_at FROM messages WHERE id = ?`)
     .get(info.lastInsertRowid);
   return normalizeRow(row);
 }
 
-export async function getRecentMessages(limit = 50) {
+export async function getRecentMessages(guildId, limit = 50) {
   const rows = db
     .prepare(
-      `SELECT id, user_id, nickname, content, created_at FROM messages
+      `SELECT id, guild_id, user_id, nickname, content, created_at FROM messages
+       WHERE guild_id = ?
        ORDER BY id DESC LIMIT ?`
     )
-    .all(limit);
+    .all(guildId, limit);
   return rows.reverse().map(normalizeRow);
 }
 
 export async function getMessageById(id) {
   return db
-    .prepare(`SELECT id, user_id, nickname, content FROM messages WHERE id = ?`)
+    .prepare(`SELECT id, guild_id, user_id, nickname, content FROM messages WHERE id = ?`)
     .get(id);
 }
 
@@ -122,26 +240,28 @@ export async function deleteMessage(id) {
   db.prepare(`DELETE FROM messages WHERE id = ?`).run(id);
 }
 
-export async function isBanned(userId) {
-  const row = db.prepare(`SELECT 1 FROM bans WHERE user_id = ?`).get(userId);
+// --- moderação (agora por servidor) ---
+
+export async function isBanned(guildId, userId) {
+  const row = db.prepare(`SELECT 1 FROM bans WHERE guild_id = ? AND user_id = ?`).get(guildId, userId);
   return !!row;
 }
 
-export async function banUser(userId, bannedBy, reason = null) {
+export async function banUser(guildId, userId, bannedBy, reason = null) {
   db.prepare(
-    `INSERT INTO bans (user_id, banned_by, reason) VALUES (?, ?, ?)
-     ON CONFLICT(user_id) DO UPDATE SET banned_by = excluded.banned_by, reason = excluded.reason, created_at = datetime('now')`
-  ).run(userId, bannedBy, reason);
+    `INSERT INTO bans (guild_id, user_id, banned_by, reason) VALUES (?, ?, ?, ?)
+     ON CONFLICT(guild_id, user_id) DO UPDATE SET banned_by = excluded.banned_by, reason = excluded.reason, created_at = datetime('now')`
+  ).run(guildId, userId, bannedBy, reason);
 }
 
-export async function unbanUser(userId) {
-  db.prepare(`DELETE FROM bans WHERE user_id = ?`).run(userId);
+export async function unbanUser(guildId, userId) {
+  db.prepare(`DELETE FROM bans WHERE guild_id = ? AND user_id = ?`).run(guildId, userId);
 }
 
-export async function addAuditLog(actorNickname, action, targetNickname, detail = null) {
+export async function addAuditLog(guildId, actorNickname, action, targetNickname, detail = null) {
   db.prepare(
-    `INSERT INTO audit_log (actor_nickname, action, target_nickname, detail) VALUES (?, ?, ?, ?)`
-  ).run(actorNickname, action, targetNickname, detail);
+    `INSERT INTO audit_log (guild_id, actor_nickname, action, target_nickname, detail) VALUES (?, ?, ?, ?, ?)`
+  ).run(guildId, actorNickname, action, targetNickname, detail);
 }
 
 function normalizeRow(row) {
