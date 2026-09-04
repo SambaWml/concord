@@ -36,10 +36,25 @@ button {
   font-family: inherit;
   cursor: pointer;
   border: none;
+  transition: background-color 0.12s ease, color 0.12s ease, opacity 0.12s ease;
 }
 
 input {
   font-family: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }
 
 /* ---------- login ---------- */
@@ -279,6 +294,25 @@ input {
   padding: 4px 14px;
   font-size: 0.82rem;
   color: var(--ink-muted);
+  border-radius: 6px;
+}
+
+.online-user:hover {
+  background: var(--surface-2);
+}
+
+.online-user-avatar {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.68rem;
 }
 
 .online-user-name {
@@ -313,6 +347,22 @@ input {
   border-radius: 50%;
   background: var(--online);
   flex-shrink: 0;
+}
+
+.avatar-status-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--online);
+  border: 2px solid var(--surface);
+  flex-shrink: 0;
+}
+
+.avatar-status-dot--off {
+  background: var(--ink-muted);
 }
 
 .me-bar {
@@ -566,10 +616,9 @@ input {
 .chat-messages {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 20px;
+  padding: 16px 20px 4px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
 }
 
 .chat-empty {
@@ -579,7 +628,40 @@ input {
 }
 
 .chat-message {
-  max-width: 640px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 680px;
+  margin-top: 14px;
+  padding-right: 26px;
+  position: relative;
+  border-radius: 6px;
+}
+
+.chat-message--grouped {
+  margin-top: 1px;
+}
+
+.chat-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.chat-message-content {
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-message--grouped .chat-message-content {
+  margin-left: 48px;
 }
 
 .chat-message-head {
@@ -604,12 +686,30 @@ input {
   font-variant-numeric: tabular-nums;
 }
 
+.chat-message-time--grouped {
+  opacity: 0;
+  margin-left: 8px;
+  font-size: 0.64rem;
+}
+
+.chat-message--grouped:hover .chat-message-time--grouped {
+  opacity: 1;
+}
+
 .chat-message-delete {
+  position: absolute;
+  right: 0;
+  top: 0;
   background: none;
-  padding: 0 4px;
+  padding: 3px 5px;
   font-size: 0.75rem;
   opacity: 0;
   color: var(--ink-muted);
+  border-radius: 5px;
+}
+
+.chat-message:hover {
+  background: var(--surface-2);
 }
 
 .chat-message:hover .chat-message-delete {
@@ -619,6 +719,7 @@ input {
 .chat-message-delete:hover {
   opacity: 1 !important;
   color: var(--danger);
+  background: var(--surface-3);
 }
 
 .chat-message-body {
@@ -633,6 +734,7 @@ input {
   font-size: 0.78rem;
   color: var(--ink-muted);
   font-style: italic;
+  margin-top: 12px;
 }
 
 .chat-composer {
@@ -672,6 +774,14 @@ input {
   cursor: not-allowed;
 }
 
+.mobile-topbar {
+  display: none;
+}
+
+.sidebar-backdrop {
+  display: none;
+}
+
 @media (max-width: 720px) {
   .app {
     grid-template-columns: 0 0 1fr;
@@ -679,6 +789,60 @@ input {
   .server-rail,
   .channel-list {
     display: none;
+  }
+
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface);
+    font-weight: 600;
+    font-size: 0.92rem;
+    grid-column: 1 / -1;
+  }
+
+  .mobile-menu-btn {
+    background: var(--surface-2);
+    color: var(--ink);
+    border-radius: 7px;
+    padding: 6px 10px;
+    font-size: 1rem;
+  }
+
+  .app {
+    grid-template-rows: auto 1fr;
+  }
+
+  .main-area {
+    grid-column: 1 / -1;
+  }
+
+  .app.sidebar-open .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 25;
+  }
+
+  .app.sidebar-open .server-rail,
+  .app.sidebar-open .channel-list {
+    display: flex;
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    z-index: 30;
+  }
+
+  .app.sidebar-open .server-rail {
+    left: 0;
+  }
+
+  .app.sidebar-open .channel-list {
+    left: 72px;
+    width: 240px;
   }
 }
 

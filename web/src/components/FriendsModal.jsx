@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { avatarColor, initial } from "../utils/avatar.js";
 
 export default function FriendsModal({
   friends,
@@ -71,7 +72,10 @@ export default function FriendsModal({
             {friends.length === 0 && <p className="friends-empty">Ainda sem amigos por aqui.</p>}
             {friends.map((f) => (
               <div className="friend-row" key={f.id}>
-                <span className={"online-dot" + (f.online ? "" : " online-dot--off")} />
+                <span className="online-user-avatar" style={{ background: avatarColor(f.nickname) }}>
+                  {initial(f.nickname)}
+                  <span className={"avatar-status-dot" + (f.online ? "" : " avatar-status-dot--off")} />
+                </span>
                 <span className="friend-name">{f.nickname}</span>
                 <div className="friend-actions">
                   {currentGuildId && (
@@ -95,6 +99,9 @@ export default function FriendsModal({
             )}
             {incomingRequests.map((r) => (
               <div className="friend-row" key={r.id}>
+                <span className="online-user-avatar" style={{ background: avatarColor(r.nickname) }}>
+                  {initial(r.nickname)}
+                </span>
                 <span className="friend-name">{r.nickname}</span>
                 <div className="friend-actions">
                   <button onClick={() => onAccept(r)} className="friend-accept">
@@ -108,6 +115,9 @@ export default function FriendsModal({
             ))}
             {outgoingRequests.map((r) => (
               <div className="friend-row" key={r.id}>
+                <span className="online-user-avatar" style={{ background: avatarColor(r.nickname) }}>
+                  {initial(r.nickname)}
+                </span>
                 <span className="friend-name">{r.nickname}</span>
                 <span className="friend-pending">pedido enviado</span>
               </div>

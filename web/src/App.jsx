@@ -5,6 +5,7 @@ import Chat from "./components/Chat.jsx";
 import VoicePanel from "./components/VoicePanel.jsx";
 import ServerModal from "./components/ServerModal.jsx";
 import FriendsModal from "./components/FriendsModal.jsx";
+import { avatarColor, initial } from "./utils/avatar.js";
 
 const STORAGE_KEY = "concord:identity";
 // guarda { userId, nickname, sessionToken, lastGuildId } — nunca a senha.
@@ -39,6 +40,7 @@ export default function App() {
   const [online, setOnline] = useState([]);
   const [showServerModal, setShowServerModal] = useState(false);
   const [inviteCode, setInviteCode] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [showWebhooks, setShowWebhooks] = useState(false);
   const [webhooks, setWebhooks] = useState([]);
   const [showFriendsModal, setShowFriendsModal] = useState(false);
@@ -272,7 +274,15 @@ export default function App() {
   const currentGuild = guilds.find((g) => g.id === currentGuildId);
 
   return (
-    <div className="app">
+    <div className={"app" + (sidebarOpen ? " sidebar-open" : "")}>
+      <div className="mobile-topbar">
+        <button className="mobile-menu-btn" onClick={() => setSidebarOpen(true)} title="Menu">
+          ☰
+        </button>
+        <span>{currentGuild?.name || "Concord"}</span>
+      </div>
+      <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />
+
       <aside className="server-rail">
         <button
           className="server-icon server-icon--friends"
@@ -292,7 +302,10 @@ export default function App() {
               "server-icon" + (g.id === currentGuildId ? " server-icon--active" : "")
             }
             title={g.name}
-            onClick={() => switchGuild(g.id)}
+            onClick={() => {
+              switchGuild(g.id);
+              setSidebarOpen(false);
+            }}
           >
             {g.name.slice(0, 1).toUpperCase()}
           </button>
@@ -363,7 +376,10 @@ export default function App() {
           </div>
           {online.map((u) => (
             <div className="online-user" key={u.userId}>
-              <span className="online-dot" />
+              <span className="online-user-avatar" style={{ background: avatarColor(u.nickname) }}>
+                {initial(u.nickname)}
+                <span className="avatar-status-dot" />
+              </span>
               <span className="online-user-name">
                 {u.isAdmin && "👑 "}
                 {u.nickname}
