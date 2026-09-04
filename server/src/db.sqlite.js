@@ -70,11 +70,17 @@ export async function initDb() {
       user_id TEXT REFERENCES users(id),
       nickname TEXT NOT NULL,
       content TEXT NOT NULL,
+      via_webhook INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
   try {
     db.exec(`ALTER TABLE messages ADD COLUMN guild_id TEXT REFERENCES guilds(id)`);
+  } catch {
+    // já existe
+  }
+  try {
+    db.exec(`ALTER TABLE messages ADD COLUMN via_webhook INTEGER NOT NULL DEFAULT 0`);
   } catch {
     // já existe
   }
@@ -98,6 +104,17 @@ export async function initDb() {
       action TEXT NOT NULL,
       target_nickname TEXT,
       detail TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id TEXT PRIMARY KEY,
+      token TEXT NOT NULL,
+      guild_id TEXT REFERENCES guilds(id),
+      name TEXT NOT NULL,
+      created_by TEXT REFERENCES users(id),
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
@@ -219,12 +236,16 @@ export async function getInviteForGuild(guildId) {
 
 // --- mensagens (agora por servidor) ---
 
-export async function insertMessage(guildId, userId, nickname, content) {
+export async function insertMessage(guildId, userId, nickname, content, viaWebhook = false) {
   const info = db
-    .prepare(`INSERT INTO messages (guild_id, user_id, nickname, content) VALUES (?, ?, ?, ?)`)
-    .run(guildId, userId, nickname, content);
+    .prepare(
+      `INSERT INTO messages (guild_id, user_id, nickname, content, via_webhook) VALUES (?, ?, ?, ?, ?)`
+    )
+    .run(guildId, userId, nickname, content, viaWebhook ? 1 : 0);
   const row = db
-    .prepare(`SELECT id, guild_id, user_id, nickname, content, created_at FROM messages WHERE id = ?`)
+    .prepare(
+      `SELECT id, guild_id, user_id, nickname, content, via_webhook, created_at FROM messages WHERE id = ?`
+    )
     .get(info.lastInsertRowid);
   return normalizeRow(row);
 }
@@ -232,7 +253,7 @@ export async function insertMessage(guildId, userId, nickname, content) {
 export async function getRecentMessages(guildId, limit = 50) {
   const rows = db
     .prepare(
-      `SELECT id, guild_id, user_id, nickname, content, created_at FROM messages
+      `SELECT id, guild_id, user_id, nickname, content, via_webhook, created_at FROM messages
        WHERE guild_id = ?
        ORDER BY id DESC LIMIT ?`
     )
@@ -337,10 +358,40 @@ export async function getOutgoingRequests(userId) {
     .all(userId);
 }
 
+// --- webhooks ---
+
+export async function createWebhook(id, token, guildId, name, createdBy) {
+  db.prepare(
+    `INSERT INTO webhooks (id, token, guild_id, name, created_by) VALUES (?, ?, ?, ?, ?)`
+  ).run(id, token, guildId, name, createdBy);
+}
+
+export async function getWebhook(id, token) {
+  return db
+    .prepare(`SELECT id, token, guild_id, name FROM webhooks WHERE id = ? AND token = ?`)
+    .get(id, token);
+}
+
+export async function getWebhooksForGuild(guildId) {
+  return db
+    .prepare(`SELECT id, token, name, created_at FROM webhooks WHERE guild_id = ? ORDER BY created_at`)
+    .all(guildId);
+}
+
+export async function deleteWebhook(id, guildId) {
+  db.prepare(`DELETE FROM webhooks WHERE id = ? AND guild_id = ?`).run(id, guildId);
+}
+
 function normalizeRow(row) {
   if (!row) return row;
+  const normalized = { ...row };
   // SQLite grava "2026-09-04 15:53:23" (UTC, sem fuso) — o front lê essa
   // string com `new Date(...)`, que só interpreta UTC corretamente com um
   // formato ISO explícito.
-  return { ...row, created_at: row.created_at.replace(" ", "T") + "Z" };
+  if (normalized.created_at) {
+    normalized.created_at = normalized.created_at.replace(" ", "T") + "Z";
+  }
+  // SQLite guarda booleano como 0/1 — normaliza pra bater com o Postgres
+  if ("via_webhook" in normalized) normalized.via_webhook = !!normalized.via_webhook;
+  return normalized;
 }

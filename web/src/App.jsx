@@ -39,6 +39,8 @@ export default function App() {
   const [online, setOnline] = useState([]);
   const [showServerModal, setShowServerModal] = useState(false);
   const [inviteCode, setInviteCode] = useState(null);
+  const [showWebhooks, setShowWebhooks] = useState(false);
+  const [webhooks, setWebhooks] = useState([]);
   const [showFriendsModal, setShowFriendsModal] = useState(false);
   const [friends, setFriends] = useState([]);
   const [incomingRequests, setIncomingRequests] = useState([]);
@@ -235,6 +237,37 @@ export default function App() {
     if (res?.ok) setInviteCode(res.code);
   }
 
+  async function toggleWebhooks() {
+    if (showWebhooks) {
+      setShowWebhooks(false);
+      return;
+    }
+    const res = await emitAsync("webhook:list", {});
+    if (res?.ok) {
+      setWebhooks(res.webhooks);
+      setShowWebhooks(true);
+    }
+  }
+
+  async function createWebhook() {
+    const name = window.prompt("Nome do webhook (aparece como autor das mensagens):", "Webhook");
+    if (!name) return;
+    const res = await emitAsync("webhook:create", { name });
+    if (res?.ok) {
+      setWebhooks((prev) => [...prev, res.webhook]);
+    }
+  }
+
+  async function removeWebhook(id) {
+    if (!window.confirm("Apagar esse webhook? Quem tiver a URL para de conseguir postar.")) return;
+    await emitAsync("webhook:delete", { id });
+    setWebhooks((prev) => prev.filter((w) => w.id !== id));
+  }
+
+  function webhookUrl(w) {
+    return `${window.location.origin}/api/webhooks/${w.id}/${w.token}`;
+  }
+
   const canModerate = isAdmin || isGuildOwner;
   const currentGuild = guilds.find((g) => g.id === currentGuildId);
 
@@ -276,15 +309,46 @@ export default function App() {
       <aside className="channel-list">
         <div className="channel-list-header">
           <span>{currentGuild?.name || "Concord"}</span>
-          <button className="invite-btn" onClick={toggleInvite} title="Convidar gente">
-            👤+
-          </button>
+          <div className="channel-list-header-actions">
+            {canModerate && (
+              <button className="invite-btn" onClick={toggleWebhooks} title="Webhooks">
+                🪝
+              </button>
+            )}
+            <button className="invite-btn" onClick={toggleInvite} title="Convidar gente">
+              👤+
+            </button>
+          </div>
         </div>
         {inviteCode && (
           <div className="invite-code-box invite-code-box--inline">
             <code>{inviteCode}</code>
             <button type="button" onClick={() => navigator.clipboard?.writeText(inviteCode)}>
               Copiar
+            </button>
+          </div>
+        )}
+        {showWebhooks && (
+          <div className="webhook-panel">
+            {webhooks.length === 0 && <p className="webhook-empty">Nenhum webhook ainda.</p>}
+            {webhooks.map((w) => (
+              <div className="webhook-row" key={w.id}>
+                <div className="webhook-row-head">
+                  <span>{w.name}</span>
+                  <button onClick={() => removeWebhook(w.id)} title="Apagar">
+                    ✕
+                  </button>
+                </div>
+                <div className="invite-code-box">
+                  <code className="webhook-url">{webhookUrl(w)}</code>
+                  <button type="button" onClick={() => navigator.clipboard?.writeText(webhookUrl(w))}>
+                    Copiar
+                  </button>
+                </div>
+              </div>
+            ))}
+            <button className="webhook-create-btn" onClick={createWebhook}>
+              + Criar webhook
             </button>
           </div>
         )}

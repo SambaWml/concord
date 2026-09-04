@@ -65,10 +65,12 @@ export async function initDb() {
       user_id UUID REFERENCES users(id),
       nickname TEXT NOT NULL,
       content TEXT NOT NULL,
+      via_webhook BOOLEAN NOT NULL DEFAULT false,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS guild_id UUID REFERENCES guilds(id);`);
+  await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS via_webhook BOOLEAN NOT NULL DEFAULT false;`);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS messages_guild_created_idx ON messages (guild_id, created_at);
@@ -108,6 +110,17 @@ export async function initDb() {
     );
   `);
   await pool.query(`ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS guild_id UUID REFERENCES guilds(id);`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS webhooks (
+      id UUID PRIMARY KEY,
+      token TEXT NOT NULL,
+      guild_id UUID REFERENCES guilds(id),
+      name TEXT NOT NULL,
+      created_by UUID REFERENCES users(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS friendships (
@@ -250,19 +263,19 @@ export async function getInviteForGuild(guildId) {
 
 // --- mensagens (agora por servidor) ---
 
-export async function insertMessage(guildId, userId, nickname, content) {
+export async function insertMessage(guildId, userId, nickname, content, viaWebhook = false) {
   const { rows } = await pool.query(
-    `INSERT INTO messages (guild_id, user_id, nickname, content)
-     VALUES ($1, $2, $3, $4)
-     RETURNING id, guild_id, user_id, nickname, content, created_at`,
-    [guildId, userId, nickname, content]
+    `INSERT INTO messages (guild_id, user_id, nickname, content, via_webhook)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING id, guild_id, user_id, nickname, content, via_webhook, created_at`,
+    [guildId, userId, nickname, content, viaWebhook]
   );
   return rows[0];
 }
 
 export async function getRecentMessages(guildId, limit = 50) {
   const { rows } = await pool.query(
-    `SELECT id, guild_id, user_id, nickname, content, created_at
+    `SELECT id, guild_id, user_id, nickname, content, via_webhook, created_at
      FROM messages
      WHERE guild_id = $1
      ORDER BY created_at DESC
@@ -379,4 +392,33 @@ export async function getOutgoingRequests(userId) {
     [userId]
   );
   return rows;
+}
+
+// --- webhooks ---
+
+export async function createWebhook(id, token, guildId, name, createdBy) {
+  await pool.query(
+    `INSERT INTO webhooks (id, token, guild_id, name, created_by) VALUES ($1, $2, $3, $4, $5)`,
+    [id, token, guildId, name, createdBy]
+  );
+}
+
+export async function getWebhook(id, token) {
+  const { rows } = await pool.query(
+    `SELECT id, token, guild_id, name FROM webhooks WHERE id = $1 AND token = $2`,
+    [id, token]
+  );
+  return rows[0];
+}
+
+export async function getWebhooksForGuild(guildId) {
+  const { rows } = await pool.query(
+    `SELECT id, token, name, created_at FROM webhooks WHERE guild_id = $1 ORDER BY created_at`,
+    [guildId]
+  );
+  return rows;
+}
+
+export async function deleteWebhook(id, guildId) {
+  await pool.query(`DELETE FROM webhooks WHERE id = $1 AND guild_id = $2`, [id, guildId]);
 }

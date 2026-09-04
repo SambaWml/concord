@@ -49,6 +49,7 @@ export default function Chat({ messages, onSend, onDelete, myUserId, isAdmin }) 
             >
               <div className="chat-message-head">
                 <span className="chat-message-author">{m.nickname}</span>
+                {m.via_webhook && <span className="chat-webhook-badge">WEBHOOK</span>}
                 <span className="chat-message-time">{formatTime(m.created_at)}</span>
                 {canDelete && (
                   <button

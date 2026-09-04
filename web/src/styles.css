@@ -916,3 +916,77 @@ input {
   width: 100%;
   margin-top: 4px;
 }
+
+/* ---------- webhooks ---------- */
+.channel-list-header-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.webhook-panel {
+  margin: 0 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.webhook-empty {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  margin: 0;
+}
+
+.webhook-row {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.webhook-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.82rem;
+  font-weight: 500;
+}
+
+.webhook-row-head button {
+  background: none;
+  color: var(--ink-muted);
+  padding: 2px 4px;
+}
+
+.webhook-row-head button:hover {
+  color: var(--danger);
+}
+
+.webhook-url {
+  font-size: 0.68rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.webhook-create-btn {
+  background: var(--surface-2);
+  color: var(--accent);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.chat-webhook-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: var(--accent-soft);
+  color: var(--accent);
+  padding: 1px 5px;
+  border-radius: 4px;
+}

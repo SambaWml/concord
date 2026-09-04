@@ -36,6 +36,11 @@ export const banUser = impl.banUser;
 export const unbanUser = impl.unbanUser;
 export const addAuditLog = impl.addAuditLog;
 
+export const createWebhook = impl.createWebhook;
+export const getWebhook = impl.getWebhook;
+export const getWebhooksForGuild = impl.getWebhooksForGuild;
+export const deleteWebhook = impl.deleteWebhook;
+
 export const getFriendshipEither = impl.getFriendshipEither;
 export const createFriendRequest = impl.createFriendRequest;
 export const acceptFriendRequest = impl.acceptFriendRequest;

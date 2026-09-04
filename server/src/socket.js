@@ -22,6 +22,9 @@ import {
   isBanned,
   banUser,
   addAuditLog,
+  createWebhook,
+  getWebhooksForGuild,
+  deleteWebhook,
   getFriendshipEither,
   createFriendRequest,
   acceptFriendRequest,
@@ -303,6 +306,50 @@ export function attachSocket(io) {
         console.error("guild:invite failed", err);
         ack?.({ ok: false, error: "Falha ao gerar convite." });
       }
+    });
+
+    // --- webhooks: só dono do servidor atual ou admin global ---
+    socket.on("webhook:create", async ({ name }, ack) => {
+      const guildId = socket.data.currentGuildId;
+      const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
+      if (!canManage || !guildId) {
+        ack?.({ ok: false, error: "Só o dono do servidor cria webhooks." });
+        return;
+      }
+      try {
+        const cleanName = String(name || "Webhook").trim().slice(0, 40) || "Webhook";
+        const id = uuidv4();
+        const token = crypto.randomBytes(24).toString("base64url");
+        await createWebhook(id, token, guildId, cleanName, socket.data.userId);
+        ack?.({ ok: true, webhook: { id, token, name: cleanName } });
+      } catch (err) {
+        console.error("webhook:create failed", err);
+        ack?.({ ok: false, error: "Falha ao criar webhook." });
+      }
+    });
+
+    socket.on("webhook:list", async (_payload, ack) => {
+      const guildId = socket.data.currentGuildId;
+      const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
+      if (!canManage || !guildId) {
+        ack?.({ ok: false, error: "Só o dono do servidor vê os webhooks." });
+        return;
+      }
+      try {
+        const webhooks = await getWebhooksForGuild(guildId);
+        ack?.({ ok: true, webhooks });
+      } catch (err) {
+        console.error("webhook:list failed", err);
+        ack?.({ ok: false, error: "Falha ao listar webhooks." });
+      }
+    });
+
+    socket.on("webhook:delete", async ({ id }, ack) => {
+      const guildId = socket.data.currentGuildId;
+      const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
+      if (!canManage || !guildId || !id) return;
+      await deleteWebhook(id, guildId);
+      ack?.({ ok: true });
     });
 
     // --- chat (escopado ao servidor que o socket está vendo agora) ---

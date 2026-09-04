@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { Server } from "socket.io";
 import { initDb } from "./db.js";
 import { attachSocket } from "./socket.js";
+import { createWebhookRouter } from "./webhookRoute.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 5000;
@@ -20,17 +21,21 @@ const app = express();
 app.use(cors({ origin: CLIENT_ORIGIN }));
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-// Em produção o próprio servidor serve o front (build do Vite) — assim dá
-// pra hospedar tudo num único serviço gratuito, sem precisar de dois deploys.
-app.use(express.static(webDist));
-app.get("*", (_req, res) => res.sendFile(path.join(webDist, "index.html")));
-
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: CLIENT_ORIGIN },
 });
 
 attachSocket(io);
+
+// precisa do io pra avisar o chat em tempo real quando alguém de fora posta
+app.use("/api/webhooks", createWebhookRouter(io));
+
+// Em produção o próprio servidor serve o front (build do Vite) — assim dá
+// pra hospedar tudo num único serviço gratuito, sem precisar de dois deploys.
+// Fica por último: é um catch-all, tudo que é rota de API vem antes.
+app.use(express.static(webDist));
+app.get("*", (_req, res) => res.sendFile(path.join(webDist, "index.html")));
 
 initDb()
   .then(() => {
