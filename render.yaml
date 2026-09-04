@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: concord
+    runtime: node
+    plan: free
+    buildCommand: npm run build
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      # CLIENT_ORIGIN é opcional: sem ela, aceita qualquer origem (ok pra
+      # produção porque front e back rodam no mesmo serviço/domínio).
