@@ -16,6 +16,28 @@ if (import.meta.env.VITE_TURN_URL) {
 export const canShareScreen =
   typeof navigator !== "undefined" && !!navigator.mediaDevices?.getDisplayMedia;
 
+// Sem esses tetos, o WebRTC tenta mandar vídeo em bitrate mais alto do que
+// a rede aguenta — e é exatamente esse congestionamento que aparece como
+// lag/travamento, principalmente na malha (cada pessoa manda vídeo pra
+// todo mundo ao mesmo tempo, dividindo o upload disponível).
+const WEBCAM_MAX_BITRATE = 500_000; // ~500kbps é de sobra pra um tile pequeno
+const SCREEN_MAX_BITRATE = 1_500_000; // tela pede mais nitidez, mas sem exagerar
+
+function tuneVideoSender(sender, { maxBitrate, degradationPreference = "maintain-framerate" } = {}) {
+  if (!sender || sender.track?.kind !== "video") return;
+  try {
+    const params = sender.getParameters();
+    params.encodings = params.encodings?.length ? params.encodings : [{}];
+    if (maxBitrate) params.encodings[0].maxBitrate = maxBitrate;
+    // prioriza manter o vídeo fluido (sem travar) reduzindo nitidez, em vez
+    // de derrubar o frame rate quando a rede aperta.
+    params.degradationPreference = degradationPreference;
+    sender.setParameters(params).catch(() => {});
+  } catch {
+    // navegador não suporta ajustar isso — segue com o padrão dele
+  }
+}
+
 export function useVoice(socket) {
   const [joined, setJoined] = useState(false);
   const [localStream, setLocalStream] = useState(null);
@@ -53,18 +75,21 @@ export function useVoice(socket) {
     (peerId) => {
       const pc = new RTCPeerConnection({ iceServers });
 
-      localStreamRef.current
-        ?.getTracks()
-        .forEach((track) => pc.addTrack(track, localStreamRef.current));
+      localStreamRef.current?.getTracks().forEach((track) => {
+        const sender = pc.addTrack(track, localStreamRef.current);
+        tuneVideoSender(sender, { maxBitrate: WEBCAM_MAX_BITRATE });
+      });
 
       // se eu já estiver compartilhando a tela quando essa conexão nasce
       // (alguém entrou na chamada depois de eu já estar compartilhando),
       // a tela entra junto — mesmo que só caiba de fato numa renegociação
       // logo em seguida (ver handleSignal).
       if (screenStreamRef.current) {
-        const senders = screenStreamRef.current
-          .getTracks()
-          .map((track) => pc.addTrack(track, screenStreamRef.current));
+        const senders = screenStreamRef.current.getTracks().map((track) => {
+          const sender = pc.addTrack(track, screenStreamRef.current);
+          tuneVideoSender(sender, { maxBitrate: SCREEN_MAX_BITRATE });
+          return sender;
+        });
         screenSendersRef.current.set(peerId, senders);
       }
 
@@ -200,12 +225,19 @@ export function useVoice(socket) {
       noiseSuppression: true,
       autoGainControl: true,
     };
+    // câmera pequena, 24fps — de sobra pra um tile de chamada, e bem mais
+    // leve de codificar/transmitir do que a resolução máxima da webcam.
+    const videoConstraints = {
+      width: { ideal: 640 },
+      height: { ideal: 480 },
+      frameRate: { ideal: 24, max: 30 },
+    };
     try {
       let stream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: audioConstraints,
-          video: true,
+          video: videoConstraints,
         });
       } catch {
         stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
@@ -260,7 +292,14 @@ export function useVoice(socket) {
     setError("");
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: true,
+        // a maioria do que se compartilha (texto, apps) não precisa de 60fps
+        // — travar em ~24-30fps evita que o encoder exija mais banda do que
+        // a rede tem, que é a causa mais comum de lag no compartilhamento.
+        video: {
+          frameRate: { ideal: 24, max: 30 },
+          width: { max: 1920 },
+          height: { max: 1080 },
+        },
         audio: true,
         // hints que só Chrome/Edge entendem: pré-marca "compartilhar áudio
         // do sistema" quando a pessoa escolhe "Tela inteira" (sem isso o
@@ -285,9 +324,11 @@ export function useVoice(socket) {
       socket.emit("voice:screen-share", { sharing: true });
 
       peersRef.current.forEach((pc, peerId) => {
-        const senders = stream
-          .getTracks()
-          .map((track) => pc.addTrack(track, stream));
+        const senders = stream.getTracks().map((track) => {
+          const sender = pc.addTrack(track, stream);
+          tuneVideoSender(sender, { maxBitrate: SCREEN_MAX_BITRATE });
+          return sender;
+        });
         screenSendersRef.current.set(peerId, senders);
         renegotiateWith(peerId);
       });
