@@ -109,6 +109,16 @@ export async function initDb() {
   `);
   await pool.query(`ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS guild_id UUID REFERENCES guilds(id);`);
 
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS friendships (
+      requester_id UUID REFERENCES users(id),
+      addressee_id UUID REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (requester_id, addressee_id)
+    );
+  `);
+
   await ensureDefaultGuild();
 }
 
@@ -303,4 +313,70 @@ export async function addAuditLog(guildId, actorNickname, action, targetNickname
      VALUES ($1, $2, $3, $4, $5)`,
     [guildId, actorNickname, action, targetNickname, detail]
   );
+}
+
+// --- amizades ---
+
+export async function getFriendshipEither(userA, userB) {
+  const { rows } = await pool.query(
+    `SELECT requester_id, addressee_id, status FROM friendships
+     WHERE (requester_id = $1 AND addressee_id = $2) OR (requester_id = $2 AND addressee_id = $1)`,
+    [userA, userB]
+  );
+  return rows[0];
+}
+
+export async function createFriendRequest(requesterId, addresseeId) {
+  await pool.query(
+    `INSERT INTO friendships (requester_id, addressee_id, status) VALUES ($1, $2, 'pending')`,
+    [requesterId, addresseeId]
+  );
+}
+
+export async function acceptFriendRequest(requesterId, addresseeId) {
+  await pool.query(
+    `UPDATE friendships SET status = 'accepted' WHERE requester_id = $1 AND addressee_id = $2`,
+    [requesterId, addresseeId]
+  );
+}
+
+export async function deleteFriendshipEither(userA, userB) {
+  await pool.query(
+    `DELETE FROM friendships WHERE (requester_id = $1 AND addressee_id = $2) OR (requester_id = $2 AND addressee_id = $1)`,
+    [userA, userB]
+  );
+}
+
+export async function getFriends(userId) {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.nickname
+     FROM friendships f
+     JOIN users u ON u.id = CASE WHEN f.requester_id = $1 THEN f.addressee_id ELSE f.requester_id END
+     WHERE (f.requester_id = $1 OR f.addressee_id = $1) AND f.status = 'accepted'
+     ORDER BY u.nickname`,
+    [userId]
+  );
+  return rows;
+}
+
+export async function getIncomingRequests(userId) {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.nickname FROM friendships f
+     JOIN users u ON u.id = f.requester_id
+     WHERE f.addressee_id = $1 AND f.status = 'pending'
+     ORDER BY f.created_at`,
+    [userId]
+  );
+  return rows;
+}
+
+export async function getOutgoingRequests(userId) {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.nickname FROM friendships f
+     JOIN users u ON u.id = f.addressee_id
+     WHERE f.requester_id = $1 AND f.status = 'pending'
+     ORDER BY f.created_at`,
+    [userId]
+  );
+  return rows;
 }

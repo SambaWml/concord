@@ -22,6 +22,13 @@ import {
   isBanned,
   banUser,
   addAuditLog,
+  getFriendshipEither,
+  createFriendRequest,
+  acceptFriendRequest,
+  deleteFriendshipEither,
+  getFriends,
+  getIncomingRequests,
+  getOutgoingRequests,
 } from "./db.js";
 import { hashPassword, verifyPassword } from "./auth.js";
 
@@ -59,10 +66,18 @@ export function attachSocket(io) {
   const online = new Map(); // guildId -> Map<socket.id, {userId, nickname, isAdmin}>
   const voiceRoom = new Map(); // guildId -> Map<socket.id, {userId, nickname}>
   const sessions = new Map(); // sessionToken -> { userId, nickname }
+  // Independe de servidor — pra notificar um amigo (pedido/aceite) não
+  // importa em qual servidor ele esteja olhando agora, ou se está em nenhum.
+  const userSockets = new Map(); // userId -> Set<socket.id>
 
   const onlineList = (guildId) => [...(online.get(guildId)?.values() || [])];
   const voiceRoster = (guildId) =>
     [...(voiceRoom.get(guildId)?.entries() || [])].map(([socketId, v]) => ({ socketId, ...v }));
+
+  const isUserOnline = (userId) => (userSockets.get(userId)?.size || 0) > 0;
+  function emitToUser(userId, event, payload) {
+    for (const sid of userSockets.get(userId) || []) io.to(sid).emit(event, payload);
+  }
 
   const socketsOf = (guildId, targetUserId) => {
     const room = io.sockets.adapter.rooms.get(guildId);
@@ -158,6 +173,15 @@ export function attachSocket(io) {
           guilds = await getGuildsForUser(user.id);
         }
 
+        if (!userSockets.has(user.id)) userSockets.set(user.id, new Set());
+        userSockets.get(user.id).add(socket.id);
+
+        const [friends, incomingRequests, outgoingRequests] = await Promise.all([
+          getFriends(user.id),
+          getIncomingRequests(user.id),
+          getOutgoingRequests(user.id),
+        ]);
+
         const newSessionToken = uuidv4();
         sessions.set(newSessionToken, { userId: user.id, nickname: user.nickname });
 
@@ -168,6 +192,9 @@ export function attachSocket(io) {
           isAdmin,
           sessionToken: newSessionToken,
           guilds,
+          friends: friends.map((f) => ({ ...f, online: isUserOnline(f.id) })),
+          incomingRequests,
+          outgoingRequests,
         });
       } catch (err) {
         console.error("auth failed", err);
@@ -412,6 +439,135 @@ export function attachSocket(io) {
 
     socket.on("disconnect", () => {
       leaveCurrentGuild(socket);
+      if (socket.data.userId) {
+        const set = userSockets.get(socket.data.userId);
+        set?.delete(socket.id);
+        if (set && set.size === 0) userSockets.delete(socket.data.userId);
+      }
+    });
+
+    // --- amigos ---
+
+    socket.on("friend:request", async ({ nickname }, ack) => {
+      if (!socket.data.userId) return;
+      try {
+        const target = await findUserByNickname(String(nickname || "").trim());
+        if (!target) {
+          ack?.({ ok: false, error: "Apelido não encontrado." });
+          return;
+        }
+        if (target.id === socket.data.userId) {
+          ack?.({ ok: false, error: "Você não pode adicionar a si mesmo." });
+          return;
+        }
+        const existing = await getFriendshipEither(socket.data.userId, target.id);
+        if (existing?.status === "accepted") {
+          ack?.({ ok: false, error: "Vocês já são amigos." });
+          return;
+        }
+        if (existing?.status === "pending") {
+          if (existing.requester_id === socket.data.userId) {
+            ack?.({ ok: false, error: "Pedido já enviado, só esperar." });
+            return;
+          }
+          // a outra pessoa já tinha te chamado — vira amigo na hora
+          await acceptFriendRequest(existing.requester_id, existing.addressee_id);
+          emitToUser(target.id, "friend:accepted", {
+            id: socket.data.userId,
+            nickname: socket.data.nickname,
+          });
+          ack?.({
+            ok: true,
+            status: "accepted",
+            friend: { id: target.id, nickname: target.nickname },
+          });
+          return;
+        }
+        await createFriendRequest(socket.data.userId, target.id);
+        emitToUser(target.id, "friend:request-received", {
+          id: socket.data.userId,
+          nickname: socket.data.nickname,
+        });
+        ack?.({ ok: true, status: "pending" });
+      } catch (err) {
+        console.error("friend:request failed", err);
+        ack?.({ ok: false, error: "Falha ao enviar pedido." });
+      }
+    });
+
+    socket.on("friend:accept", async ({ userId: requesterId }, ack) => {
+      if (!socket.data.userId || !requesterId) return;
+      try {
+        await acceptFriendRequest(requesterId, socket.data.userId);
+        const requester = await findUserById(requesterId);
+        emitToUser(requesterId, "friend:accepted", {
+          id: socket.data.userId,
+          nickname: socket.data.nickname,
+        });
+        ack?.({
+          ok: true,
+          friend: requester
+            ? { id: requester.id, nickname: requester.nickname, online: isUserOnline(requester.id) }
+            : null,
+        });
+      } catch (err) {
+        console.error("friend:accept failed", err);
+        ack?.({ ok: false, error: "Falha ao aceitar." });
+      }
+    });
+
+    socket.on("friend:decline", async ({ userId: otherId }, ack) => {
+      if (!socket.data.userId || !otherId) return;
+      await deleteFriendshipEither(socket.data.userId, otherId);
+      ack?.({ ok: true });
+    });
+
+    socket.on("friend:remove", async ({ userId: otherId }, ack) => {
+      if (!socket.data.userId || !otherId) return;
+      await deleteFriendshipEither(socket.data.userId, otherId);
+      emitToUser(otherId, "friend:removed", { id: socket.data.userId });
+      ack?.({ ok: true });
+    });
+
+    socket.on("friend:list", async (_payload, ack) => {
+      if (!socket.data.userId) return;
+      const [friends, incomingRequests, outgoingRequests] = await Promise.all([
+        getFriends(socket.data.userId),
+        getIncomingRequests(socket.data.userId),
+        getOutgoingRequests(socket.data.userId),
+      ]);
+      ack?.({
+        ok: true,
+        friends: friends.map((f) => ({ ...f, online: isUserOnline(f.id) })),
+        incomingRequests,
+        outgoingRequests,
+      });
+    });
+
+    socket.on("friend:invite-to-guild", async ({ friendId, guildId }, ack) => {
+      if (!socket.data.userId || !friendId || !guildId) return;
+      try {
+        const friendship = await getFriendshipEither(socket.data.userId, friendId);
+        if (friendship?.status !== "accepted") {
+          ack?.({ ok: false, error: "Vocês precisam ser amigos primeiro." });
+          return;
+        }
+        if (!(await isGuildMember(guildId, socket.data.userId))) {
+          ack?.({ ok: false, error: "Você não é membro desse servidor." });
+          return;
+        }
+        if (await isBanned(guildId, friendId)) {
+          ack?.({ ok: false, error: "Essa pessoa está banida desse servidor." });
+          return;
+        }
+        await addGuildMember(guildId, friendId);
+        const guild = await getGuildById(guildId);
+        emitToUser(friendId, "guild:added", guild);
+        ack?.({ ok: true });
+      } catch (err) {
+        console.error("friend:invite-to-guild failed", err);
+        ack?.({ ok: false, error: "Falha ao convidar." });
+      }
     });
   });
 }

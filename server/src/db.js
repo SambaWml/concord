@@ -35,3 +35,11 @@ export const isBanned = impl.isBanned;
 export const banUser = impl.banUser;
 export const unbanUser = impl.unbanUser;
 export const addAuditLog = impl.addAuditLog;
+
+export const getFriendshipEither = impl.getFriendshipEither;
+export const createFriendRequest = impl.createFriendRequest;
+export const acceptFriendRequest = impl.acceptFriendRequest;
+export const deleteFriendshipEither = impl.deleteFriendshipEither;
+export const getFriends = impl.getFriends;
+export const getIncomingRequests = impl.getIncomingRequests;
+export const getOutgoingRequests = impl.getOutgoingRequests;

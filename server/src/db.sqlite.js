@@ -102,6 +102,16 @@ export async function initDb() {
     );
   `);
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS friendships (
+      requester_id TEXT REFERENCES users(id),
+      addressee_id TEXT REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (requester_id, addressee_id)
+    );
+  `);
+
   ensureDefaultGuild();
 
   console.log(`[dev] usando SQLite local em ${dbPath}`);
@@ -262,6 +272,69 @@ export async function addAuditLog(guildId, actorNickname, action, targetNickname
   db.prepare(
     `INSERT INTO audit_log (guild_id, actor_nickname, action, target_nickname, detail) VALUES (?, ?, ?, ?, ?)`
   ).run(guildId, actorNickname, action, targetNickname, detail);
+}
+
+// --- amizades ---
+
+export async function getFriendshipEither(userA, userB) {
+  return db
+    .prepare(
+      `SELECT requester_id, addressee_id, status FROM friendships
+       WHERE (requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)`
+    )
+    .get(userA, userB, userB, userA);
+}
+
+export async function createFriendRequest(requesterId, addresseeId) {
+  db.prepare(
+    `INSERT INTO friendships (requester_id, addressee_id, status) VALUES (?, ?, 'pending')`
+  ).run(requesterId, addresseeId);
+}
+
+export async function acceptFriendRequest(requesterId, addresseeId) {
+  db.prepare(
+    `UPDATE friendships SET status = 'accepted' WHERE requester_id = ? AND addressee_id = ?`
+  ).run(requesterId, addresseeId);
+}
+
+export async function deleteFriendshipEither(userA, userB) {
+  db.prepare(
+    `DELETE FROM friendships WHERE (requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)`
+  ).run(userA, userB, userB, userA);
+}
+
+export async function getFriends(userId) {
+  return db
+    .prepare(
+      `SELECT u.id, u.nickname
+       FROM friendships f
+       JOIN users u ON u.id = CASE WHEN f.requester_id = ? THEN f.addressee_id ELSE f.requester_id END
+       WHERE (f.requester_id = ? OR f.addressee_id = ?) AND f.status = 'accepted'
+       ORDER BY u.nickname`
+    )
+    .all(userId, userId, userId);
+}
+
+export async function getIncomingRequests(userId) {
+  return db
+    .prepare(
+      `SELECT u.id, u.nickname FROM friendships f
+       JOIN users u ON u.id = f.requester_id
+       WHERE f.addressee_id = ? AND f.status = 'pending'
+       ORDER BY f.created_at`
+    )
+    .all(userId);
+}
+
+export async function getOutgoingRequests(userId) {
+  return db
+    .prepare(
+      `SELECT u.id, u.nickname FROM friendships f
+       JOIN users u ON u.id = f.addressee_id
+       WHERE f.requester_id = ? AND f.status = 'pending'
+       ORDER BY f.created_at`
+    )
+    .all(userId);
 }
 
 function normalizeRow(row) {

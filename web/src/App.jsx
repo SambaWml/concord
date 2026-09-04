@@ -4,6 +4,7 @@ import Login from "./components/Login.jsx";
 import Chat from "./components/Chat.jsx";
 import VoicePanel from "./components/VoicePanel.jsx";
 import ServerModal from "./components/ServerModal.jsx";
+import FriendsModal from "./components/FriendsModal.jsx";
 
 const STORAGE_KEY = "concord:identity";
 // guarda { userId, nickname, sessionToken, lastGuildId } — nunca a senha.
@@ -38,6 +39,10 @@ export default function App() {
   const [online, setOnline] = useState([]);
   const [showServerModal, setShowServerModal] = useState(false);
   const [inviteCode, setInviteCode] = useState(null);
+  const [showFriendsModal, setShowFriendsModal] = useState(false);
+  const [friends, setFriends] = useState([]);
+  const [incomingRequests, setIncomingRequests] = useState([]);
+  const [outgoingRequests, setOutgoingRequests] = useState([]);
 
   function applyAuthSuccess(res, previousIdentity) {
     const next = {
@@ -50,6 +55,9 @@ export default function App() {
     setIdentity(next);
     setIsAdmin(!!res.isAdmin);
     setGuilds(res.guilds || []);
+    setFriends(res.friends || []);
+    setIncomingRequests(res.incomingRequests || []);
+    setOutgoingRequests(res.outgoingRequests || []);
     setStatus("online");
     setError("");
 
@@ -67,6 +75,9 @@ export default function App() {
     setMessages([]);
     setOnline([]);
     setInviteCode(null);
+    setFriends([]);
+    setIncomingRequests([]);
+    setOutgoingRequests([]);
     setError(reason);
   }
 
@@ -145,6 +156,31 @@ export default function App() {
     function onBanned() {
       backToLogin("Você foi banido deste servidor.");
     }
+    function onFriendRequestReceived(from) {
+      setIncomingRequests((prev) =>
+        prev.some((r) => r.id === from.id) ? prev : [...prev, from]
+      );
+    }
+    function onFriendAccepted(friend) {
+      setFriends((prev) => (prev.some((f) => f.id === friend.id) ? prev : [...prev, { ...friend, online: true }]));
+      setOutgoingRequests((prev) => prev.filter((r) => r.id !== friend.id));
+    }
+    function onFriendRemoved({ id }) {
+      setFriends((prev) => prev.filter((f) => f.id !== id));
+    }
+    function onGuildAdded(guild) {
+      setGuilds((prev) => (prev.some((g) => g.id === guild.id) ? prev : [...prev, guild]));
+      systemMsgSeq += 1;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `sys-${systemMsgSeq}`,
+          system: true,
+          content: `Você foi adicionado ao servidor "${guild.name}".`,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+    }
 
     socket.on("chat:message", onMessage);
     socket.on("chat:message-deleted", onMessageDeleted);
@@ -154,6 +190,10 @@ export default function App() {
     socket.on("connect", onConnect);
     socket.on("mod:kicked", onKicked);
     socket.on("mod:banned", onBanned);
+    socket.on("friend:request-received", onFriendRequestReceived);
+    socket.on("friend:accepted", onFriendAccepted);
+    socket.on("friend:removed", onFriendRemoved);
+    socket.on("guild:added", onGuildAdded);
 
     return () => {
       socket.off("chat:message", onMessage);
@@ -164,6 +204,10 @@ export default function App() {
       socket.off("connect", onConnect);
       socket.off("mod:kicked", onKicked);
       socket.off("mod:banned", onBanned);
+      socket.off("friend:request-received", onFriendRequestReceived);
+      socket.off("friend:accepted", onFriendAccepted);
+      socket.off("friend:removed", onFriendRemoved);
+      socket.off("guild:added", onGuildAdded);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity]);
@@ -197,6 +241,17 @@ export default function App() {
   return (
     <div className="app">
       <aside className="server-rail">
+        <button
+          className="server-icon server-icon--friends"
+          title="Amigos"
+          onClick={() => setShowFriendsModal(true)}
+        >
+          👥
+          {incomingRequests.length > 0 && (
+            <span className="server-icon-badge">{incomingRequests.length}</span>
+          )}
+        </button>
+        <div className="server-rail-divider" />
         {guilds.map((g) => (
           <button
             key={g.id}
@@ -302,6 +357,51 @@ export default function App() {
               );
               await switchGuild(res.guild.id);
             }
+            return res;
+          }}
+        />
+      )}
+
+      {showFriendsModal && (
+        <FriendsModal
+          friends={friends}
+          incomingRequests={incomingRequests}
+          outgoingRequests={outgoingRequests}
+          currentGuildId={currentGuildId}
+          onClose={() => setShowFriendsModal(false)}
+          onSendRequest={async (nickname) => {
+            const res = await emitAsync("friend:request", { nickname });
+            if (res.ok) {
+              if (res.status === "accepted") {
+                setFriends((prev) => [...prev, { ...res.friend, online: true }]);
+              } else {
+                setOutgoingRequests((prev) => [...prev, { id: null, nickname }]);
+              }
+            }
+            return res;
+          }}
+          onAccept={async (r) => {
+            const res = await emitAsync("friend:accept", { userId: r.id });
+            if (res.ok) {
+              setIncomingRequests((prev) => prev.filter((i) => i.id !== r.id));
+              setFriends((prev) => [...prev, res.friend]);
+            }
+            return res;
+          }}
+          onDecline={async (r) => {
+            await emitAsync("friend:decline", { userId: r.id });
+            setIncomingRequests((prev) => prev.filter((i) => i.id !== r.id));
+          }}
+          onRemove={async (f) => {
+            if (!window.confirm(`Desfazer amizade com ${f.nickname}?`)) return;
+            await emitAsync("friend:remove", { userId: f.id });
+            setFriends((prev) => prev.filter((x) => x.id !== f.id));
+          }}
+          onInviteToGuild={async (f) => {
+            const res = await emitAsync("friend:invite-to-guild", {
+              friendId: f.id,
+              guildId: currentGuildId,
+            });
             return res;
           }}
         />

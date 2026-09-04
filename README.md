@@ -13,6 +13,7 @@ Múltiplos servidores, cada um com seu próprio chat e chamada de voz/vídeo com
 - Compartilhar tela na chamada, com tela cheia e volume por pessoa
 - **Moderação:** o dono de um servidor modera só o que criou; quem está em `ADMIN_NICKNAMES` modera em todos — apagar mensagem, expulsar (temporário) ou banir (permanente, só naquele servidor) — veja "Definindo quem é admin" abaixo
 - **Anti-spam:** no máximo 5 mensagens a cada 10 segundos por pessoa
+- **Amigos:** pedido de amizade, aceitar/recusar, lista com status online, e convidar amigo direto pra um servidor (sem precisar de código)
 
 ## Servidores
 
