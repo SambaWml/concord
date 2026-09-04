@@ -35,6 +35,26 @@ export async function initDb() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS messages_created_at_idx ON messages (created_at);
   `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bans (
+      user_id UUID PRIMARY KEY REFERENCES users(id),
+      banned_by TEXT NOT NULL,
+      reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id BIGSERIAL PRIMARY KEY,
+      actor_nickname TEXT NOT NULL,
+      action TEXT NOT NULL,
+      target_nickname TEXT,
+      detail TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
 }
 
 export async function upsertUser(id, nickname) {
@@ -50,7 +70,7 @@ export async function insertMessage(userId, nickname, content) {
   const { rows } = await pool.query(
     `INSERT INTO messages (user_id, nickname, content)
      VALUES ($1, $2, $3)
-     RETURNING id, nickname, content, created_at`,
+     RETURNING id, user_id, nickname, content, created_at`,
     [userId, nickname, content]
   );
   return rows[0];
@@ -58,11 +78,49 @@ export async function insertMessage(userId, nickname, content) {
 
 export async function getRecentMessages(limit = 50) {
   const { rows } = await pool.query(
-    `SELECT id, nickname, content, created_at
+    `SELECT id, user_id, nickname, content, created_at
      FROM messages
      ORDER BY created_at DESC
      LIMIT $1`,
     [limit]
   );
   return rows.reverse();
+}
+
+export async function getMessageById(id) {
+  const { rows } = await pool.query(
+    `SELECT id, user_id, nickname, content FROM messages WHERE id = $1`,
+    [id]
+  );
+  return rows[0];
+}
+
+export async function deleteMessage(id) {
+  await pool.query(`DELETE FROM messages WHERE id = $1`, [id]);
+}
+
+export async function isBanned(userId) {
+  const { rows } = await pool.query(`SELECT 1 FROM bans WHERE user_id = $1`, [userId]);
+  return rows.length > 0;
+}
+
+export async function banUser(userId, bannedBy, reason = null) {
+  await pool.query(
+    `INSERT INTO bans (user_id, banned_by, reason)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id) DO UPDATE SET banned_by = $2, reason = $3, created_at = now()`,
+    [userId, bannedBy, reason]
+  );
+}
+
+export async function unbanUser(userId) {
+  await pool.query(`DELETE FROM bans WHERE user_id = $1`, [userId]);
+}
+
+export async function addAuditLog(actorNickname, action, targetNickname, detail = null) {
+  await pool.query(
+    `INSERT INTO audit_log (actor_nickname, action, target_nickname, detail)
+     VALUES ($1, $2, $3, $4)`,
+    [actorNickname, action, targetNickname, detail]
+  );
 }

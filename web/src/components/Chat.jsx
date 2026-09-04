@@ -7,7 +7,7 @@ function formatTime(iso) {
   });
 }
 
-export default function Chat({ messages, onSend, myNickname }) {
+export default function Chat({ messages, onSend, onDelete, myUserId, isAdmin }) {
   const [draft, setDraft] = useState("");
   const listRef = useRef(null);
 
@@ -32,23 +32,38 @@ export default function Chat({ messages, onSend, myNickname }) {
             Ainda não tem nenhuma mensagem por aqui. Diga oi 👋
           </div>
         )}
-        {messages.map((m) => (
-          <div
-            className={
-              "chat-message" +
-              (m.nickname === myNickname ? " chat-message--mine" : "")
-            }
-            key={m.id}
-          >
-            <div className="chat-message-head">
-              <span className="chat-message-author">{m.nickname}</span>
-              <span className="chat-message-time">
-                {formatTime(m.created_at)}
-              </span>
+        {messages.map((m) => {
+          if (m.system) {
+            return (
+              <div className="chat-system" key={m.id}>
+                {m.content}
+              </div>
+            );
+          }
+          const isMine = m.user_id === myUserId;
+          const canDelete = isMine || isAdmin;
+          return (
+            <div
+              className={"chat-message" + (isMine ? " chat-message--mine" : "")}
+              key={m.id}
+            >
+              <div className="chat-message-head">
+                <span className="chat-message-author">{m.nickname}</span>
+                <span className="chat-message-time">{formatTime(m.created_at)}</span>
+                {canDelete && (
+                  <button
+                    className="chat-message-delete"
+                    title="Apagar mensagem"
+                    onClick={() => onDelete(m.id)}
+                  >
+                    🗑
+                  </button>
+                )}
+              </div>
+              <div className="chat-message-body">{m.content}</div>
             </div>
-            <div className="chat-message-body">{m.content}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <form className="chat-composer" onSubmit={submit}>
         <input

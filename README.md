@@ -1,6 +1,6 @@
 # Concord — MVP
 
-Um servidor "Geral" único: chat de texto persistente + chamada de voz/vídeo em grupo. Web hoje, executável desktop na Fase 2 (veja o [Concord Blueprint](.) para o roadmap completo).
+Um servidor "Geral" único: chat de texto persistente, chamada de voz/vídeo em grupo com compartilhamento de tela, e moderação básica. Web e executável desktop.
 
 ## O que já funciona
 
@@ -8,12 +8,26 @@ Um servidor "Geral" único: chat de texto persistente + chamada de voz/vídeo em
 - Chat em tempo real no canal `#geral`, com histórico salvo em Postgres — fecha o navegador, entra de novo, as mensagens continuam lá
 - Lista de quem está online, atualizada em tempo real
 - Canal de voz "Geral": qualquer um entra, fala, liga câmera se quiser — todo mundo conectado direto um no outro (WebRTC), sem servidor de mídia pago no meio
+- Compartilhar tela na chamada (renegocia a mesma conexão de voz, sem servidor de mídia)
+- **Moderação básica:** admins podem apagar mensagem de qualquer um, expulsar (temporário) ou banir (permanente) — veja "Definindo quem é admin" abaixo
+- **Anti-spam:** no máximo 5 mensagens a cada 10 segundos por pessoa
+
+## Definindo quem é admin
+
+Sem sistema de login ainda, "ser admin" é decidido por uma lista de apelidos de confiança na variável de ambiente `ADMIN_NICKNAMES` (separados por vírgula):
+
+```
+ADMIN_NICKNAMES=Wesley,OutroAdmin
+```
+
+Local: coloque isso no `server/.env`. No Render: **Environment** → adicionar essa variável → salvar (reinicia sozinho). Quem entrar com um desses apelidos exatos vira admin e ganha um 👑 do lado do nome, além dos botões de expulsar/banir na lista de online e apagar mensagem de qualquer um no chat.
 
 ## Limitações conhecidas do MVP (de propósito)
 
-- **Voz em malha (mesh):** cada participante se conecta direto com todo mundo. Funciona bem até uns 6–8 pessoas na chamada ao mesmo tempo; passando disso, a qualidade cai porque cada um está enviando vídeo/áudio pra todo mundo. Resolver isso é a Fase 3 do blueprint (servidor de mídia / SFU).
+- **Voz em malha (mesh):** cada participante se conecta direto com todo mundo. Funciona bem até uns 6–8 pessoas na chamada ao mesmo tempo; passando disso, a qualidade cai porque cada um está enviando vídeo/áudio pra todo mundo. Resolver isso é trabalho de uma fase futura (servidor de mídia / SFU).
 - **Sem TURN por padrão:** usa só STUN público (grátis). Funciona na grande maioria das redes domésticas/4G. Se alguém não conseguir conectar a chamada (rede corporativa restrita), configure um TURN gratuito (ex: metered.ca) nas variáveis `VITE_TURN_URL/VITE_TURN_USERNAME/VITE_TURN_CREDENTIAL` do front.
-- **Sem senha ainda:** identidade é só um apelido salvo no navegador. Qualquer um pode se passar por qualquer nome — ok pra um grupo de confiança, não pronto pra público aberto.
+- **Sem senha ainda:** identidade é só um apelido salvo no navegador. Qualquer um pode digitar o mesmo apelido de um admin e ganhar os poderes dele — `ADMIN_NICKNAMES` é "honra ao mérito", não segurança de verdade. Só vira seguro com login/senha real, que é trabalho futuro.
+- **Ban é best-effort:** como não tem conta de verdade, quem foi banido pode limpar o navegador (ou usar outro) e voltar com identidade nova. Barra o caso comum, não o caso hostil.
 - **Um servidor só, um canal de texto só:** por design, é o escopo deste MVP.
 
 ## Rodando local
