@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { suppressNoise } from "./noiseSuppression.js";
 
 // STUN público (grátis) resolve a maioria das redes domésticas. Se quiser
 // mais confiabilidade em redes corporativas/4G, configure um TURN gratuito
@@ -29,6 +30,7 @@ export function useVoice(socket) {
 
   const peersRef = useRef(new Map()); // socketId -> RTCPeerConnection
   const localStreamRef = useRef(null);
+  const noiseSuppressionRef = useRef(null); // { stream, stop() } de suppressNoise()
   const screenStreamRef = useRef(null);
   const screenSendersRef = useRef(new Map()); // socketId -> RTCRtpSender[] (faixas da tela)
 
@@ -210,8 +212,14 @@ export function useVoice(socket) {
       }
       // câmera começa desligada — só o microfone entra ativo por padrão.
       stream.getVideoTracks().forEach((t) => (t.enabled = false));
-      localStreamRef.current = stream;
-      setLocalStream(stream);
+
+      // troca o áudio cru por uma versão tratada por IA (tipo Krisp), se o
+      // navegador suportar — se não der, usa o áudio original mesmo assim.
+      const ns = await suppressNoise(stream);
+      noiseSuppressionRef.current = ns;
+
+      localStreamRef.current = ns.stream;
+      setLocalStream(ns.stream);
       setMuted(false);
       setCameraOn(false);
       socket.emit("voice:join");
@@ -298,7 +306,11 @@ export function useVoice(socket) {
     socket.emit("voice:leave");
     peersRef.current.forEach((pc) => pc.close());
     peersRef.current.clear();
-    localStreamRef.current?.getTracks().forEach((t) => t.stop());
+    // vídeo para direto; áudio passa pelo cleanup da supressão de ruído,
+    // que também libera o microfone cru por trás dela.
+    localStreamRef.current?.getVideoTracks().forEach((t) => t.stop());
+    noiseSuppressionRef.current?.stop();
+    noiseSuppressionRef.current = null;
     localStreamRef.current = null;
     setLocalStream(null);
     setRemoteStreams({});
