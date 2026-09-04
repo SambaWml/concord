@@ -191,15 +191,22 @@ export function useVoice(socket) {
 
   const join = useCallback(async () => {
     setError("");
+    // supressão de ruído + cancelamento de eco + ganho automático — o
+    // navegador já processa isso antes do áudio sair do seu computador.
+    const audioConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
     try {
       let stream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
+          audio: audioConstraints,
           video: true,
         });
       } catch {
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
       }
       // câmera começa desligada — só o microfone entra ativo por padrão.
       stream.getVideoTracks().forEach((t) => (t.enabled = false));

@@ -1,33 +1,86 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { canShareScreen, useVoice } from "../hooks/useVoice.js";
+
+function VolumeSlider({ value, onChange, label }) {
+  return (
+    <div className="volume-row">
+      <span aria-hidden="true">{value === 0 ? "🔇" : "🔊"}</span>
+      <input
+        type="range"
+        min="0"
+        max="1"
+        step="0.05"
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-label={`Volume de ${label}`}
+      />
+    </div>
+  );
+}
 
 function VideoTile({ stream, label, muted, isSelf, videoOff }) {
   const ref = useRef(null);
+  const [volume, setVolume] = useState(1);
+
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream || null;
   }, [stream]);
+
+  useEffect(() => {
+    if (ref.current) ref.current.volume = volume;
+  }, [volume]);
+
   return (
-    <div className="voice-tile">
-      <video ref={ref} autoPlay playsInline muted={muted} />
-      {videoOff && (
-        <div className="voice-tile-avatar">{label.slice(0, 1).toUpperCase()}</div>
-      )}
-      <span className="voice-tile-label">
-        {label} {isSelf && "(você)"}
-      </span>
+    <div className="voice-participant">
+      <div className="voice-tile">
+        <video ref={ref} autoPlay playsInline muted={muted} />
+        {videoOff && (
+          <div className="voice-tile-avatar">{label.slice(0, 1).toUpperCase()}</div>
+        )}
+        <span className="voice-tile-label">
+          {label} {isSelf && "(você)"}
+        </span>
+      </div>
+      {!isSelf && <VolumeSlider value={volume} onChange={setVolume} label={label} />}
     </div>
   );
 }
 
 function ScreenTile({ stream, label, muted }) {
   const ref = useRef(null);
+  const wrapRef = useRef(null);
+  const [volume, setVolume] = useState(1);
+
   useEffect(() => {
     if (ref.current) ref.current.srcObject = stream || null;
   }, [stream]);
+
+  useEffect(() => {
+    if (ref.current) ref.current.volume = volume;
+  }, [volume]);
+
+  function toggleFullscreen() {
+    if (document.fullscreenElement) {
+      document.exitFullscreen();
+    } else {
+      wrapRef.current?.requestFullscreen?.();
+    }
+  }
+
   return (
-    <div className="voice-stage-tile">
-      <video ref={ref} autoPlay playsInline muted={muted} />
-      <span className="voice-tile-label">🖥️ {label}</span>
+    <div className="voice-stage-item">
+      <div className="voice-stage-tile" ref={wrapRef}>
+        <video ref={ref} autoPlay playsInline muted={muted} />
+        <span className="voice-tile-label">🖥️ {label}</span>
+        <button
+          className="voice-stage-fullscreen"
+          title="Tela cheia"
+          onClick={toggleFullscreen}
+        >
+          ⛶
+        </button>
+      </div>
+      {!muted && <VolumeSlider value={volume} onChange={setVolume} label={label} />}
     </div>
   );
 }
@@ -63,7 +116,7 @@ export default function VoicePanel({ socket, myNickname }) {
               <ScreenTile
                 key={socketId + "-screen"}
                 stream={stream}
-                label={`Tela de ${peer?.nickname || "alguém"}`}
+                label={peer?.nickname || "alguém"}
               />
             );
           })}
@@ -113,7 +166,7 @@ export default function VoicePanel({ socket, myNickname }) {
             onClick={voice.sharingScreen ? voice.stopScreenShare : voice.startScreenShare}
             title={voice.sharingScreen ? "Parar de compartilhar tela" : "Compartilhar tela"}
           >
-            {voice.sharingScreen ? "🖥️ Parar de compartilhar" : "🖥️ Compartilhar tela"}
+            🖥️
           </button>
         )}
         <button className="voice-btn voice-btn--leave" onClick={voice.leave}>
