@@ -21,7 +21,10 @@ export const canShareScreen =
 // lag/travamento, principalmente na malha (cada pessoa manda vídeo pra
 // todo mundo ao mesmo tempo, dividindo o upload disponível).
 const WEBCAM_MAX_BITRATE = 500_000; // ~500kbps é de sobra pra um tile pequeno
-const SCREEN_MAX_BITRATE = 1_500_000; // tela pede mais nitidez, mas sem exagerar
+// Tela é o foco: 60fps + bitrate alto pra qualidade de verdade. O custo é
+// mais upload consumido (multiplica por pessoa assistindo, na malha) — se
+// alguém sentir travamento assistindo, é o primeiro número pra baixar.
+const SCREEN_MAX_BITRATE = 6_000_000;
 
 function tuneVideoSender(sender, { maxBitrate, degradationPreference = "maintain-framerate" } = {}) {
   if (!sender || sender.track?.kind !== "video") return;
@@ -292,13 +295,13 @@ export function useVoice(socket, channelId) {
     setError("");
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        // a maioria do que se compartilha (texto, apps) não precisa de 60fps
-        // — travar em ~24-30fps evita que o encoder exija mais banda do que
-        // a rede tem, que é a causa mais comum de lag no compartilhamento.
+        // qualidade é a prioridade aqui: 60fps de verdade, resolução alta.
+        // Isso custa banda de upload de propósito — quem assiste que sinta
+        // a diferença; se travar em rede fraca, é aqui que se reduz de novo.
         video: {
-          frameRate: { ideal: 24, max: 30 },
-          width: { max: 1920 },
-          height: { max: 1080 },
+          frameRate: { ideal: 60, max: 60 },
+          width: { max: 2560 },
+          height: { max: 1440 },
         },
         audio: true,
         // hints que só Chrome/Edge entendem: pré-marca "compartilhar áudio

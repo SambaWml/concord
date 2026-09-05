@@ -53,6 +53,7 @@ Local: coloque isso no `server/.env`. No Render: **Environment** → adicionar e
 ## Limitações conhecidas do MVP (de propósito)
 
 - **Voz em malha (mesh):** cada participante se conecta direto com todo mundo. Funciona bem até uns 6–8 pessoas na chamada ao mesmo tempo; passando disso, a qualidade cai porque cada um está enviando vídeo/áudio pra todo mundo. Resolver isso é trabalho de uma fase futura (servidor de mídia / SFU).
+- **Compartilhar tela prioriza qualidade (60fps, até 6Mbps):** ótimo pra quem assiste, pesado pro upload de quem compartilha — numa mesh com várias pessoas assistindo, isso multiplica. Se travar, o ajuste fica em `SCREEN_MAX_BITRATE` (`web/src/hooks/useVoice.js`).
 - **Sem TURN por padrão:** usa só STUN público (grátis). Funciona na grande maioria das redes domésticas/4G. Se alguém não conseguir conectar a chamada (rede corporativa restrita), configure um TURN gratuito (ex: metered.ca) nas variáveis `VITE_TURN_URL/VITE_TURN_USERNAME/VITE_TURN_CREDENTIAL` do front.
 - **Sem e-mail/recuperação de senha:** esqueceu a senha, perde o apelido — não tem "esqueci minha senha" ainda. Pra um grupo pequeno de confiança, ok; pra escala maior, precisaria de recuperação de verdade.
 - **Ban ainda é best-effort:** agora que apelido tem senha, criar uma identidade nova exige escolher um apelido novo (não só limpar o navegador) — mais alto que antes, mas ainda não impede de vez quem realmente quiser voltar com outro nome.
