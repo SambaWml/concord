@@ -235,15 +235,19 @@ export function attachSocket(io) {
           getOutgoingRequests(user.id),
         ]);
 
-        const newSessionToken = uuidv4();
-        sessions.set(newSessionToken, { userId: user.id, nickname: user.nickname });
+        // reconectando com token existente, reaproveita o mesmo — mintar um
+        // novo a cada reconexão (rede cai, aba dorme, socket.io reconecta
+        // sozinho) deixava a tabela de sessões crescer sem limite, com token
+        // velho nunca invalidado. Só gera token novo em login de verdade.
+        const activeSessionToken = sessionToken && sessions.has(sessionToken) ? sessionToken : uuidv4();
+        sessions.set(activeSessionToken, { userId: user.id, nickname: user.nickname });
 
         ack?.({
           ok: true,
           userId: user.id,
           nickname: user.nickname,
           isAdmin,
-          sessionToken: newSessionToken,
+          sessionToken: activeSessionToken,
           guilds,
           friends: friends.map((f) => ({ ...f, online: isUserOnline(f.id) })),
           incomingRequests,
@@ -257,8 +261,15 @@ export function attachSocket(io) {
 
     // --- servidores (guilds) ---
 
-    safeOn(socket, "guild:switch", async ({ guildId }, ack) => {
+    safeOn(socket, "guild:switch", async ({ guildId } = {}, ack) => {
       if (!socket.data.userId || !guildId) return;
+      // se dois guild:switch forem disparados em sequência rápida (clique
+      // duplo, etc.), sem isso o primeiro podia terminar depois do segundo
+      // e sobrescrever qual servidor o socket realmente ficou — cada
+      // chamada carrega um número, e só quem for o mais recente ao final
+      // de cada await é que mexe no estado.
+      const requestId = (socket.data.switchGeneration = (socket.data.switchGeneration || 0) + 1);
+      const isStale = () => socket.data.switchGeneration !== requestId;
       try {
         if (!(await isGuildMember(guildId, socket.data.userId))) {
           ack?.({ ok: false, error: "Você não é membro desse servidor." });
@@ -268,10 +279,12 @@ export function attachSocket(io) {
           ack?.({ ok: false, error: "Você foi banido deste servidor." });
           return;
         }
+        if (isStale()) return;
 
         leaveCurrentGuild(socket);
 
         const guild = await getGuildById(guildId);
+        if (isStale()) return;
         socket.data.currentGuildId = guildId;
         socket.data.isGuildOwner = guild?.owner_id === socket.data.userId;
         socket.join(guildRoom(guildId));
@@ -284,6 +297,7 @@ export function attachSocket(io) {
         });
 
         const channels = await getChannelsForGuild(guildId);
+        if (isStale()) return;
         const firstText = channels.find((c) => c.type === "text");
 
         let history = [];
@@ -291,6 +305,7 @@ export function attachSocket(io) {
           socket.data.currentChannelId = firstText.id;
           socket.join(channelRoom(firstText.id));
           history = await getRecentMessages(firstText.id, 50);
+          if (isStale()) return;
         }
 
         ack?.({
@@ -473,12 +488,17 @@ export function attachSocket(io) {
       }
     });
 
-    safeOn(socket, "webhook:delete", async ({ id }, ack) => {
+    safeOn(socket, "webhook:delete", async ({ id } = {}, ack) => {
       const guildId = socket.data.currentGuildId;
       const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
       if (!canManage || !guildId || !id) return;
-      await deleteWebhook(id, guildId);
-      ack?.({ ok: true });
+      try {
+        await deleteWebhook(id, guildId);
+        ack?.({ ok: true });
+      } catch (err) {
+        console.error("webhook:delete failed", err);
+        ack?.({ ok: false, error: "Falha ao apagar webhook." });
+      }
     });
 
     // --- chat (escopado ao canal que o socket está vendo agora) ---
@@ -541,14 +561,18 @@ export function attachSocket(io) {
     });
 
     // --- moderação: admin global ou dono do servidor atual ---
-    safeOn(socket, "mod:kick", async ({ userId: targetUserId, nickname: targetNickname }) => {
+    safeOn(socket, "mod:kick", async ({ userId: targetUserId } = {}) => {
       const guildId = socket.data.currentGuildId;
       const canModerate = socket.data.isAdmin || socket.data.isGuildOwner;
       if (!canModerate || !guildId || !targetUserId || targetUserId === socket.data.userId) return;
-      if (isAdminNickname(targetNickname)) return; // admin não expulsa admin
 
+      // apelido e status de admin vêm do próprio socket alvo, nunca do que
+      // o cliente que pediu o kick mandou — senão dava pra forjar um
+      // "nickname" qualquer e derrubar um admin de verdade.
       const targets = socketsInGuild(guildId, targetUserId);
       if (targets.length === 0) return;
+      if (targets.some((t) => t.data.isAdmin)) return; // admin não expulsa admin
+      const targetNickname = targets[0].data.nickname;
 
       await addAuditLog(guildId, socket.data.nickname, "kick", targetNickname);
       io.to(guildRoom(guildId)).emit("chat:system", {
@@ -560,16 +584,21 @@ export function attachSocket(io) {
       });
     });
 
-    safeOn(socket, "mod:ban", async ({ userId: targetUserId, nickname: targetNickname }) => {
+    safeOn(socket, "mod:ban", async ({ userId: targetUserId } = {}) => {
       const guildId = socket.data.currentGuildId;
       const canModerate = socket.data.isAdmin || socket.data.isGuildOwner;
       if (!canModerate || !guildId || !targetUserId || targetUserId === socket.data.userId) return;
-      if (isAdminNickname(targetNickname)) return; // admin não bane admin
+
+      // banido pode estar offline, então o alvo pode não ter socket — busca
+      // o apelido real da conta no banco, nunca o que o cliente mandou.
+      const targetUser = await findUserById(targetUserId);
+      if (!targetUser) return;
+      if (isAdminNickname(targetUser.nickname)) return; // admin não bane admin
 
       await banUser(guildId, targetUserId, socket.data.nickname);
-      await addAuditLog(guildId, socket.data.nickname, "ban", targetNickname);
+      await addAuditLog(guildId, socket.data.nickname, "ban", targetUser.nickname);
       io.to(guildRoom(guildId)).emit("chat:system", {
-        text: `🔨 ${targetNickname} foi banido por ${socket.data.nickname}.`,
+        text: `🔨 ${targetUser.nickname} foi banido por ${socket.data.nickname}.`,
       });
       socketsInGuild(guildId, targetUserId).forEach((t) => {
         t.emit("mod:banned");
@@ -599,8 +628,14 @@ export function attachSocket(io) {
       socket.to(voiceChannelRoom(channelId)).emit("voice:roster", voiceRoster(channelId));
     });
 
-    safeOn(socket, "voice:signal", ({ to, description, candidate }) => {
-      if (!to) return;
+    safeOn(socket, "voice:signal", ({ to, description, candidate } = {}) => {
+      const channelId = socket.data.currentVoiceChannelId;
+      if (!socket.data.userId || !to || !channelId) return;
+      // só repassa sinal pra alguém que está de fato no mesmo canal de voz —
+      // sem isso, qualquer socket que descobrisse um id de outro conseguiria
+      // injetar oferta/candidato falso numa chamada alheia.
+      const room = io.sockets.adapter.rooms.get(voiceChannelRoom(channelId));
+      if (!room || !room.has(to)) return;
       io.to(to).emit("voice:signal", {
         from: socket.id,
         nickname: socket.data.nickname,
@@ -680,20 +715,30 @@ export function attachSocket(io) {
       }
     });
 
-    safeOn(socket, "friend:accept", async ({ userId: requesterId }, ack) => {
+    safeOn(socket, "friend:accept", async ({ userId: requesterId } = {}, ack) => {
       if (!socket.data.userId || !requesterId) return;
       try {
-        await acceptFriendRequest(requesterId, socket.data.userId);
+        // confirma que existe mesmo um pedido pendente vindo dessa pessoa —
+        // sem isso, um userId qualquer (inventado ou de quem nunca pediu)
+        // ainda voltava com ok:true e friend:null, que quebrava o modal.
+        const existing = await getFriendshipEither(requesterId, socket.data.userId);
+        if (!existing || existing.status !== "pending" || existing.requester_id !== requesterId) {
+          ack?.({ ok: false, error: "Esse pedido de amizade não existe (mais)." });
+          return;
+        }
         const requester = await findUserById(requesterId);
+        if (!requester) {
+          ack?.({ ok: false, error: "Essa conta não existe mais." });
+          return;
+        }
+        await acceptFriendRequest(requesterId, socket.data.userId);
         emitToUser(requesterId, "friend:accepted", {
           id: socket.data.userId,
           nickname: socket.data.nickname,
         });
         ack?.({
           ok: true,
-          friend: requester
-            ? { id: requester.id, nickname: requester.nickname, online: isUserOnline(requester.id) }
-            : null,
+          friend: { id: requester.id, nickname: requester.nickname, online: isUserOnline(requester.id) },
         });
       } catch (err) {
         console.error("friend:accept failed", err);
@@ -701,32 +746,47 @@ export function attachSocket(io) {
       }
     });
 
-    safeOn(socket, "friend:decline", async ({ userId: otherId }, ack) => {
+    safeOn(socket, "friend:decline", async ({ userId: otherId } = {}, ack) => {
       if (!socket.data.userId || !otherId) return;
-      await deleteFriendshipEither(socket.data.userId, otherId);
-      ack?.({ ok: true });
+      try {
+        await deleteFriendshipEither(socket.data.userId, otherId);
+        ack?.({ ok: true });
+      } catch (err) {
+        console.error("friend:decline failed", err);
+        ack?.({ ok: false, error: "Falha ao recusar." });
+      }
     });
 
-    safeOn(socket, "friend:remove", async ({ userId: otherId }, ack) => {
+    safeOn(socket, "friend:remove", async ({ userId: otherId } = {}, ack) => {
       if (!socket.data.userId || !otherId) return;
-      await deleteFriendshipEither(socket.data.userId, otherId);
-      emitToUser(otherId, "friend:removed", { id: socket.data.userId });
-      ack?.({ ok: true });
+      try {
+        await deleteFriendshipEither(socket.data.userId, otherId);
+        emitToUser(otherId, "friend:removed", { id: socket.data.userId });
+        ack?.({ ok: true });
+      } catch (err) {
+        console.error("friend:remove failed", err);
+        ack?.({ ok: false, error: "Falha ao desfazer amizade." });
+      }
     });
 
     safeOn(socket, "friend:list", async (_payload, ack) => {
       if (!socket.data.userId) return;
-      const [friends, incomingRequests, outgoingRequests] = await Promise.all([
-        getFriends(socket.data.userId),
-        getIncomingRequests(socket.data.userId),
-        getOutgoingRequests(socket.data.userId),
-      ]);
-      ack?.({
-        ok: true,
-        friends: friends.map((f) => ({ ...f, online: isUserOnline(f.id) })),
-        incomingRequests,
-        outgoingRequests,
-      });
+      try {
+        const [friends, incomingRequests, outgoingRequests] = await Promise.all([
+          getFriends(socket.data.userId),
+          getIncomingRequests(socket.data.userId),
+          getOutgoingRequests(socket.data.userId),
+        ]);
+        ack?.({
+          ok: true,
+          friends: friends.map((f) => ({ ...f, online: isUserOnline(f.id) })),
+          incomingRequests,
+          outgoingRequests,
+        });
+      } catch (err) {
+        console.error("friend:list failed", err);
+        ack?.({ ok: false, error: "Falha ao carregar amigos." });
+      }
     });
 
     safeOn(socket, "friend:invite-to-guild", async ({ friendId, guildId }, ack) => {

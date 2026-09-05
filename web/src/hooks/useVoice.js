@@ -379,12 +379,22 @@ export function useVoice(socket, channelId) {
     setCameraOn(next);
   }, [cameraOn]);
 
-  // sai da chamada automaticamente se a aba fechar
+  // Sai da chamada automaticamente quando o componente desmonta (fechou a
+  // aba, ou trocou de canal de voz — o App remonta o VoicePanel com uma key
+  // nova). Usa refs porque um efeito com deps [] só monta a closure do
+  // cleanup uma vez, no primeiro render — sem os refs, esse cleanup sempre
+  // via `joined` como `false` (o valor do mount) e nunca chamava leave()
+  // de verdade, deixando a conexão de voz antiga pendurada.
+  const joinedRef = useRef(joined);
+  const leaveRef = useRef(leave);
+  useEffect(() => {
+    joinedRef.current = joined;
+    leaveRef.current = leave;
+  }, [joined, leave]);
   useEffect(() => {
     return () => {
-      if (joined) leave();
+      if (joinedRef.current) leaveRef.current();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return {

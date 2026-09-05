@@ -109,8 +109,16 @@ export async function initDb() {
   try {
     await pool.query(`ALTER TABLE bans DROP CONSTRAINT bans_pkey;`);
     await pool.query(`ALTER TABLE bans ADD PRIMARY KEY (guild_id, user_id);`);
-  } catch {
-    // já migrado numa inicialização anterior (ou já nasceu certo, acima)
+  } catch (err) {
+    // Caso normal: já migrado numa inicialização anterior (ou já nasceu
+    // certo, acima) — a 2ª tentativa falha porque a PK composta já existe.
+    // Mas se isso falhar por outro motivo (ex: linhas duplicadas em
+    // (guild_id, user_id) impedindo a nova PK), a tabela fica sem PK
+    // nenhuma e todo banUser() futuro quebra silenciosamente — melhor logar
+    // pra aparecer nos logs do Render do que sumir de vez.
+    if (!/bans_pkey.*does not exist/i.test(err.message)) {
+      console.error("Migração da PK de bans pode ter falhado de verdade:", err.message);
+    }
   }
 
   await pool.query(`
