@@ -81,6 +81,25 @@ function sanitizeChannelName(type, name) {
   return type === "text" ? clean.toLowerCase().replace(/\s+/g, "-") : clean;
 }
 
+// Todo handler abaixo desestrutura o payload direto no parâmetro (ex:
+// `({ channelId }) => ...`). Se algum cliente mandar o evento sem payload
+// (aba com versão antiga, cliente mal-feito, etc.), essa desestruturação de
+// `undefined` derruba o processo inteiro pra todo mundo — já aconteceu em
+// produção. Esse wrapper garante que um handler que falhar só loga o erro,
+// nunca crasha o servidor.
+function safeOn(socket, event, handler) {
+  socket.on(event, (...args) => {
+    try {
+      const result = handler(...args);
+      if (result && typeof result.catch === "function") {
+        result.catch((err) => console.error(`socket:${event} falhou`, err));
+      }
+    } catch (err) {
+      console.error(`socket:${event} falhou`, err);
+    }
+  });
+}
+
 export function attachSocket(io) {
   // Estado em memória — some sozinho se o processo reiniciar; histórico,
   // membros, canais, convites e bans vão pro banco.
@@ -138,7 +157,7 @@ export function attachSocket(io) {
   }
 
   io.on("connection", (socket) => {
-    socket.on("auth", async ({ nickname, password, sessionToken }, ack) => {
+    safeOn(socket, "auth", async ({ nickname, password, sessionToken }, ack) => {
       try {
         let user;
 
@@ -238,7 +257,7 @@ export function attachSocket(io) {
 
     // --- servidores (guilds) ---
 
-    socket.on("guild:switch", async ({ guildId }, ack) => {
+    safeOn(socket, "guild:switch", async ({ guildId }, ack) => {
       if (!socket.data.userId || !guildId) return;
       try {
         if (!(await isGuildMember(guildId, socket.data.userId))) {
@@ -288,7 +307,7 @@ export function attachSocket(io) {
       }
     });
 
-    socket.on("guild:create", async ({ name }, ack) => {
+    safeOn(socket, "guild:create", async ({ name }, ack) => {
       if (!socket.data.userId) return;
       const cleanName = String(name || "").trim().slice(0, MAX_GUILD_NAME_LEN);
       if (!cleanName) {
@@ -314,7 +333,7 @@ export function attachSocket(io) {
       }
     });
 
-    socket.on("guild:join", async ({ inviteCode }, ack) => {
+    safeOn(socket, "guild:join", async ({ inviteCode }, ack) => {
       if (!socket.data.userId) return;
       try {
         const code = String(inviteCode || "").trim().toUpperCase();
@@ -336,7 +355,7 @@ export function attachSocket(io) {
       }
     });
 
-    socket.on("guild:invite", async ({ guildId }, ack) => {
+    safeOn(socket, "guild:invite", async ({ guildId }, ack) => {
       if (!socket.data.userId || !guildId) return;
       try {
         if (!(await isGuildMember(guildId, socket.data.userId))) {
@@ -358,7 +377,7 @@ export function attachSocket(io) {
 
     // --- canais: trocar de canal de texto, criar/apagar (dono/admin) ---
 
-    socket.on("channel:switch", async ({ channelId }, ack) => {
+    safeOn(socket, "channel:switch", async ({ channelId }, ack) => {
       if (!socket.data.userId || !channelId) return;
       try {
         const channel = await getChannelById(channelId);
@@ -377,7 +396,7 @@ export function attachSocket(io) {
       }
     });
 
-    socket.on("channel:create", async ({ name, type, category }, ack) => {
+    safeOn(socket, "channel:create", async ({ name, type, category }, ack) => {
       const guildId = socket.data.currentGuildId;
       const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
       if (!canManage || !guildId) {
@@ -403,7 +422,7 @@ export function attachSocket(io) {
       }
     });
 
-    socket.on("channel:delete", async ({ channelId }, ack) => {
+    safeOn(socket, "channel:delete", async ({ channelId }, ack) => {
       const guildId = socket.data.currentGuildId;
       const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
       if (!canManage || !guildId || !channelId) return;
@@ -418,7 +437,7 @@ export function attachSocket(io) {
     });
 
     // --- webhooks: postam no canal que a pessoa está vendo agora ---
-    socket.on("webhook:create", async ({ name }, ack) => {
+    safeOn(socket, "webhook:create", async ({ name }, ack) => {
       const guildId = socket.data.currentGuildId;
       const channelId = socket.data.currentChannelId;
       const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
@@ -438,7 +457,7 @@ export function attachSocket(io) {
       }
     });
 
-    socket.on("webhook:list", async (_payload, ack) => {
+    safeOn(socket, "webhook:list", async (_payload, ack) => {
       const guildId = socket.data.currentGuildId;
       const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
       if (!canManage || !guildId) {
@@ -454,7 +473,7 @@ export function attachSocket(io) {
       }
     });
 
-    socket.on("webhook:delete", async ({ id }, ack) => {
+    safeOn(socket, "webhook:delete", async ({ id }, ack) => {
       const guildId = socket.data.currentGuildId;
       const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
       if (!canManage || !guildId || !id) return;
@@ -464,7 +483,7 @@ export function attachSocket(io) {
 
     // --- chat (escopado ao canal que o socket está vendo agora) ---
 
-    socket.on("chat:message", async (content) => {
+    safeOn(socket, "chat:message", async (content) => {
       const guildId = socket.data.currentGuildId;
       const channelId = socket.data.currentChannelId;
       if (!socket.data.userId || !guildId || !channelId) return;
@@ -494,7 +513,7 @@ export function attachSocket(io) {
       }
     });
 
-    socket.on("chat:delete", async (messageId) => {
+    safeOn(socket, "chat:delete", async (messageId) => {
       if (!socket.data.userId) return;
       try {
         const message = await getMessageById(messageId);
@@ -522,7 +541,7 @@ export function attachSocket(io) {
     });
 
     // --- moderação: admin global ou dono do servidor atual ---
-    socket.on("mod:kick", async ({ userId: targetUserId, nickname: targetNickname }) => {
+    safeOn(socket, "mod:kick", async ({ userId: targetUserId, nickname: targetNickname }) => {
       const guildId = socket.data.currentGuildId;
       const canModerate = socket.data.isAdmin || socket.data.isGuildOwner;
       if (!canModerate || !guildId || !targetUserId || targetUserId === socket.data.userId) return;
@@ -541,7 +560,7 @@ export function attachSocket(io) {
       });
     });
 
-    socket.on("mod:ban", async ({ userId: targetUserId, nickname: targetNickname }) => {
+    safeOn(socket, "mod:ban", async ({ userId: targetUserId, nickname: targetNickname }) => {
       const guildId = socket.data.currentGuildId;
       const canModerate = socket.data.isAdmin || socket.data.isGuildOwner;
       if (!canModerate || !guildId || !targetUserId || targetUserId === socket.data.userId) return;
@@ -561,7 +580,7 @@ export function attachSocket(io) {
     // --- sinalização WebRTC para a chamada de voz/vídeo em malha (mesh) ---
     // Quem entra por último é quem inicia a conexão com cada participante
     // já presente — evita os dois lados oferecendo ao mesmo tempo.
-    socket.on("voice:join", async ({ channelId }) => {
+    safeOn(socket, "voice:join", async ({ channelId }) => {
       if (!socket.data.userId || !channelId) return;
       const channel = await getChannelById(channelId);
       if (!channel || channel.guild_id !== socket.data.currentGuildId || channel.type !== "voice") return;
@@ -580,7 +599,7 @@ export function attachSocket(io) {
       socket.to(voiceChannelRoom(channelId)).emit("voice:roster", voiceRoster(channelId));
     });
 
-    socket.on("voice:signal", ({ to, description, candidate }) => {
+    safeOn(socket, "voice:signal", ({ to, description, candidate }) => {
       if (!to) return;
       io.to(to).emit("voice:signal", {
         from: socket.id,
@@ -592,7 +611,7 @@ export function attachSocket(io) {
 
     // Só um repasse de estado pra UI (quem tá compartilhando a tela agora) —
     // a faixa de vídeo em si viaja pela sinalização voice:signal acima.
-    socket.on("voice:screen-share", ({ sharing }) => {
+    safeOn(socket, "voice:screen-share", ({ sharing }) => {
       const channelId = socket.data.currentVoiceChannelId;
       if (!channelId) return;
       socket.to(voiceChannelRoom(channelId)).emit("voice:screen-share", {
@@ -601,9 +620,9 @@ export function attachSocket(io) {
       });
     });
 
-    socket.on("voice:leave", () => leaveVoiceChannel(socket));
+    safeOn(socket, "voice:leave", () => leaveVoiceChannel(socket));
 
-    socket.on("disconnect", () => {
+    safeOn(socket, "disconnect", () => {
       leaveCurrentGuild(socket);
       if (socket.data.userId) {
         const set = userSockets.get(socket.data.userId);
@@ -614,7 +633,7 @@ export function attachSocket(io) {
 
     // --- amigos ---
 
-    socket.on("friend:request", async ({ nickname }, ack) => {
+    safeOn(socket, "friend:request", async ({ nickname }, ack) => {
       if (!socket.data.userId) return;
       try {
         const target = await findUserByNickname(String(nickname || "").trim());
@@ -661,7 +680,7 @@ export function attachSocket(io) {
       }
     });
 
-    socket.on("friend:accept", async ({ userId: requesterId }, ack) => {
+    safeOn(socket, "friend:accept", async ({ userId: requesterId }, ack) => {
       if (!socket.data.userId || !requesterId) return;
       try {
         await acceptFriendRequest(requesterId, socket.data.userId);
@@ -682,20 +701,20 @@ export function attachSocket(io) {
       }
     });
 
-    socket.on("friend:decline", async ({ userId: otherId }, ack) => {
+    safeOn(socket, "friend:decline", async ({ userId: otherId }, ack) => {
       if (!socket.data.userId || !otherId) return;
       await deleteFriendshipEither(socket.data.userId, otherId);
       ack?.({ ok: true });
     });
 
-    socket.on("friend:remove", async ({ userId: otherId }, ack) => {
+    safeOn(socket, "friend:remove", async ({ userId: otherId }, ack) => {
       if (!socket.data.userId || !otherId) return;
       await deleteFriendshipEither(socket.data.userId, otherId);
       emitToUser(otherId, "friend:removed", { id: socket.data.userId });
       ack?.({ ok: true });
     });
 
-    socket.on("friend:list", async (_payload, ack) => {
+    safeOn(socket, "friend:list", async (_payload, ack) => {
       if (!socket.data.userId) return;
       const [friends, incomingRequests, outgoingRequests] = await Promise.all([
         getFriends(socket.data.userId),
@@ -710,7 +729,7 @@ export function attachSocket(io) {
       });
     });
 
-    socket.on("friend:invite-to-guild", async ({ friendId, guildId }, ack) => {
+    safeOn(socket, "friend:invite-to-guild", async ({ friendId, guildId }, ack) => {
       if (!socket.data.userId || !friendId || !guildId) return;
       try {
         const friendship = await getFriendshipEither(socket.data.userId, friendId);
