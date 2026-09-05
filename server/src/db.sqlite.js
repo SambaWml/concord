@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,9 +65,22 @@ export async function initDb() {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS channels (
+      id TEXT PRIMARY KEY,
+      guild_id TEXT REFERENCES guilds(id),
+      category TEXT,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       guild_id TEXT REFERENCES guilds(id),
+      channel_id TEXT REFERENCES channels(id),
       user_id TEXT REFERENCES users(id),
       nickname TEXT NOT NULL,
       content TEXT NOT NULL,
@@ -76,6 +90,11 @@ export async function initDb() {
   `);
   try {
     db.exec(`ALTER TABLE messages ADD COLUMN guild_id TEXT REFERENCES guilds(id)`);
+  } catch {
+    // já existe
+  }
+  try {
+    db.exec(`ALTER TABLE messages ADD COLUMN channel_id TEXT REFERENCES channels(id)`);
   } catch {
     // já existe
   }
@@ -113,11 +132,17 @@ export async function initDb() {
       id TEXT PRIMARY KEY,
       token TEXT NOT NULL,
       guild_id TEXT REFERENCES guilds(id),
+      channel_id TEXT REFERENCES channels(id),
       name TEXT NOT NULL,
       created_by TEXT REFERENCES users(id),
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
   `);
+  try {
+    db.exec(`ALTER TABLE webhooks ADD COLUMN channel_id TEXT REFERENCES channels(id)`);
+  } catch {
+    // já existe
+  }
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS friendships (
@@ -130,6 +155,7 @@ export async function initDb() {
   `);
 
   ensureDefaultGuild();
+  ensureDefaultChannels();
 
   console.log(`[dev] usando SQLite local em ${dbPath}`);
   console.log("[dev] defina DATABASE_URL no .env pra usar Postgres em vez disso");
@@ -142,10 +168,34 @@ function ensureDefaultGuild() {
   db.prepare(`INSERT OR IGNORE INTO guilds (id, name, owner_id) VALUES (?, 'Geral', NULL)`).run(
     DEFAULT_GUILD_ID
   );
-  db.prepare(`UPDATE messages SET guild_id = ? WHERE guild_id IS NULL`).run(DEFAULT_GUILD_ID);
   db.prepare(
     `INSERT OR IGNORE INTO guild_members (guild_id, user_id) SELECT ?, id FROM users`
   ).run(DEFAULT_GUILD_ID);
+}
+
+// Todo servidor precisa nascer com pelo menos um canal de texto e um de
+// voz — isso cobre servidores criados antes de canais múltiplos existirem
+// (inclusive migra as mensagens deles, que ficaram sem channel_id).
+function ensureDefaultChannels() {
+  const guildsWithoutChannels = db
+    .prepare(
+      `SELECT g.id FROM guilds g WHERE NOT EXISTS (SELECT 1 FROM channels c WHERE c.guild_id = g.id)`
+    )
+    .all();
+  for (const g of guildsWithoutChannels) {
+    const textId = randomUUID();
+    const voiceId = randomUUID();
+    db.prepare(
+      `INSERT INTO channels (id, guild_id, name, type, position) VALUES (?, ?, 'geral', 'text', 0)`
+    ).run(textId, g.id);
+    db.prepare(
+      `INSERT INTO channels (id, guild_id, name, type, position) VALUES (?, ?, 'Geral', 'voice', 0)`
+    ).run(voiceId, g.id);
+    db.prepare(`UPDATE messages SET channel_id = ? WHERE guild_id = ? AND channel_id IS NULL`).run(
+      textId,
+      g.id
+    );
+  }
 }
 
 export async function findUserByNickname(nickname) {
@@ -234,36 +284,63 @@ export async function getInviteForGuild(guildId) {
     .get(guildId);
 }
 
-// --- mensagens (agora por servidor) ---
+// --- canais ---
 
-export async function insertMessage(guildId, userId, nickname, content, viaWebhook = false) {
+export async function createChannel(id, guildId, name, type, category = null, position = 0) {
+  db.prepare(
+    `INSERT INTO channels (id, guild_id, name, type, category, position) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, guildId, name, type, category, position);
+}
+
+export async function getChannelsForGuild(guildId) {
+  return db
+    .prepare(
+      `SELECT id, guild_id, category, name, type, position FROM channels
+       WHERE guild_id = ? ORDER BY category IS NOT NULL, category, position, name`
+    )
+    .all(guildId);
+}
+
+export async function getChannelById(id) {
+  return db
+    .prepare(`SELECT id, guild_id, category, name, type, position FROM channels WHERE id = ?`)
+    .get(id);
+}
+
+export async function deleteChannel(id, guildId) {
+  db.prepare(`DELETE FROM channels WHERE id = ? AND guild_id = ?`).run(id, guildId);
+}
+
+// --- mensagens (agora por canal) ---
+
+export async function insertMessage(guildId, channelId, userId, nickname, content, viaWebhook = false) {
   const info = db
     .prepare(
-      `INSERT INTO messages (guild_id, user_id, nickname, content, via_webhook) VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO messages (guild_id, channel_id, user_id, nickname, content, via_webhook) VALUES (?, ?, ?, ?, ?, ?)`
     )
-    .run(guildId, userId, nickname, content, viaWebhook ? 1 : 0);
+    .run(guildId, channelId, userId, nickname, content, viaWebhook ? 1 : 0);
   const row = db
     .prepare(
-      `SELECT id, guild_id, user_id, nickname, content, via_webhook, created_at FROM messages WHERE id = ?`
+      `SELECT id, guild_id, channel_id, user_id, nickname, content, via_webhook, created_at FROM messages WHERE id = ?`
     )
     .get(info.lastInsertRowid);
   return normalizeRow(row);
 }
 
-export async function getRecentMessages(guildId, limit = 50) {
+export async function getRecentMessages(channelId, limit = 50) {
   const rows = db
     .prepare(
-      `SELECT id, guild_id, user_id, nickname, content, via_webhook, created_at FROM messages
-       WHERE guild_id = ?
+      `SELECT id, guild_id, channel_id, user_id, nickname, content, via_webhook, created_at FROM messages
+       WHERE channel_id = ?
        ORDER BY id DESC LIMIT ?`
     )
-    .all(guildId, limit);
+    .all(channelId, limit);
   return rows.reverse().map(normalizeRow);
 }
 
 export async function getMessageById(id) {
   return db
-    .prepare(`SELECT id, guild_id, user_id, nickname, content FROM messages WHERE id = ?`)
+    .prepare(`SELECT id, guild_id, channel_id, user_id, nickname, content FROM messages WHERE id = ?`)
     .get(id);
 }
 
@@ -360,15 +437,15 @@ export async function getOutgoingRequests(userId) {
 
 // --- webhooks ---
 
-export async function createWebhook(id, token, guildId, name, createdBy) {
+export async function createWebhook(id, token, guildId, channelId, name, createdBy) {
   db.prepare(
-    `INSERT INTO webhooks (id, token, guild_id, name, created_by) VALUES (?, ?, ?, ?, ?)`
-  ).run(id, token, guildId, name, createdBy);
+    `INSERT INTO webhooks (id, token, guild_id, channel_id, name, created_by) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(id, token, guildId, channelId, name, createdBy);
 }
 
 export async function getWebhook(id, token) {
   return db
-    .prepare(`SELECT id, token, guild_id, name FROM webhooks WHERE id = ? AND token = ?`)
+    .prepare(`SELECT id, token, guild_id, channel_id, name FROM webhooks WHERE id = ? AND token = ?`)
     .get(id, token);
 }
 

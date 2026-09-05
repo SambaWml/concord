@@ -15,6 +15,10 @@ import {
   createInvite,
   getInvite,
   getInviteForGuild,
+  createChannel,
+  getChannelsForGuild,
+  getChannelById,
+  deleteChannel,
   insertMessage,
   getRecentMessages,
   getMessageById,
@@ -38,6 +42,7 @@ import { hashPassword, verifyPassword } from "./auth.js";
 const MAX_NICKNAME_LEN = 24;
 const MAX_MESSAGE_LEN = 2000;
 const MAX_GUILD_NAME_LEN = 50;
+const MAX_CHANNEL_NAME_LEN = 40;
 const MIN_PASSWORD_LEN = 4;
 const RATE_LIMIT_MAX = 5; // mensagens...
 const RATE_LIMIT_WINDOW_MS = 10_000; // ...por 10 segundos
@@ -54,6 +59,13 @@ const ADMIN_NICKNAMES = new Set(
 );
 const isAdminNickname = (nickname) => ADMIN_NICKNAMES.has(String(nickname || "").toLowerCase());
 
+// Salas do Socket.io: uma por servidor (presença/avisos gerais), uma por
+// canal de texto (chat daquele canal) e uma por canal de voz (sinalização
+// daquele canal) — assim uma mensagem de #geral nunca vaza pra #memes.
+const guildRoom = (id) => `g:${id}`;
+const channelRoom = (id) => `c:${id}`;
+const voiceChannelRoom = (id) => `v:${id}`;
+
 function generateInviteCode() {
   let code = "";
   for (let i = 0; i < 8; i++) {
@@ -62,50 +74,67 @@ function generateInviteCode() {
   return code;
 }
 
+function sanitizeChannelName(type, name) {
+  const clean = String(name || "").trim().slice(0, MAX_CHANNEL_NAME_LEN);
+  if (!clean) return null;
+  // canais de texto seguem a convenção "sem espaço, minúsculo" tipo Discord
+  return type === "text" ? clean.toLowerCase().replace(/\s+/g, "-") : clean;
+}
+
 export function attachSocket(io) {
-  // Estado em memória, por servidor — some sozinho se o processo reiniciar,
-  // e cada socket só aparece aqui enquanto estiver "olhando" aquele servidor
-  // (guild:switch). Histórico, membros, convites e bans vão pro banco.
+  // Estado em memória — some sozinho se o processo reiniciar; histórico,
+  // membros, canais, convites e bans vão pro banco.
   const online = new Map(); // guildId -> Map<socket.id, {userId, nickname, isAdmin}>
-  const voiceRoom = new Map(); // guildId -> Map<socket.id, {userId, nickname}>
+  const voiceRoom = new Map(); // channelId (de voz) -> Map<socket.id, {userId, nickname}>
   const sessions = new Map(); // sessionToken -> { userId, nickname }
   // Independe de servidor — pra notificar um amigo (pedido/aceite) não
   // importa em qual servidor ele esteja olhando agora, ou se está em nenhum.
   const userSockets = new Map(); // userId -> Set<socket.id>
 
   const onlineList = (guildId) => [...(online.get(guildId)?.values() || [])];
-  const voiceRoster = (guildId) =>
-    [...(voiceRoom.get(guildId)?.entries() || [])].map(([socketId, v]) => ({ socketId, ...v }));
+  const voiceRoster = (channelId) =>
+    [...(voiceRoom.get(channelId)?.entries() || [])].map(([socketId, v]) => ({ socketId, ...v }));
 
   const isUserOnline = (userId) => (userSockets.get(userId)?.size || 0) > 0;
   function emitToUser(userId, event, payload) {
     for (const sid of userSockets.get(userId) || []) io.to(sid).emit(event, payload);
   }
 
-  const socketsOf = (guildId, targetUserId) => {
-    const room = io.sockets.adapter.rooms.get(guildId);
+  const socketsInGuild = (guildId, targetUserId) => {
+    const room = io.sockets.adapter.rooms.get(guildRoom(guildId));
     if (!room) return [];
     return [...room]
       .map((id) => io.sockets.sockets.get(id))
       .filter((s) => s && s.data.userId === targetUserId);
   };
 
-  function leaveVoice(socket, guildId) {
-    const room = guildId && voiceRoom.get(guildId);
+  function leaveVoiceChannel(socket) {
+    const channelId = socket.data.currentVoiceChannelId;
+    const room = channelId && voiceRoom.get(channelId);
     if (!room || !room.has(socket.id)) return;
     room.delete(socket.id);
-    io.to(guildId).emit("voice:peer-left", { socketId: socket.id });
-    io.to(guildId).emit("voice:roster", voiceRoster(guildId));
+    socket.leave(voiceChannelRoom(channelId));
+    io.to(voiceChannelRoom(channelId)).emit("voice:peer-left", { socketId: socket.id });
+    io.to(voiceChannelRoom(channelId)).emit("voice:roster", voiceRoster(channelId));
+    socket.data.currentVoiceChannelId = null;
+  }
+
+  function leaveCurrentChannel(socket) {
+    if (!socket.data.currentChannelId) return;
+    socket.leave(channelRoom(socket.data.currentChannelId));
+    socket.data.currentChannelId = null;
   }
 
   function leaveCurrentGuild(socket) {
     const guildId = socket.data.currentGuildId;
+    leaveVoiceChannel(socket);
+    leaveCurrentChannel(socket);
     if (!guildId) return;
-    leaveVoice(socket, guildId);
     online.get(guildId)?.delete(socket.id);
-    io.to(guildId).emit("presence:update", onlineList(guildId));
-    socket.leave(guildId);
+    io.to(guildRoom(guildId)).emit("presence:update", onlineList(guildId));
+    socket.leave(guildRoom(guildId));
     socket.data.currentGuildId = null;
+    socket.data.isGuildOwner = false;
   }
 
   io.on("connection", (socket) => {
@@ -165,6 +194,8 @@ export function attachSocket(io) {
         socket.data.nickname = user.nickname;
         socket.data.isAdmin = isAdmin;
         socket.data.currentGuildId = null;
+        socket.data.currentChannelId = null;
+        socket.data.currentVoiceChannelId = null;
         socket.data.isGuildOwner = false;
         socket.data.messageTimestamps = [];
 
@@ -224,7 +255,7 @@ export function attachSocket(io) {
         const guild = await getGuildById(guildId);
         socket.data.currentGuildId = guildId;
         socket.data.isGuildOwner = guild?.owner_id === socket.data.userId;
-        socket.join(guildId);
+        socket.join(guildRoom(guildId));
 
         if (!online.has(guildId)) online.set(guildId, new Map());
         online.get(guildId).set(socket.id, {
@@ -233,9 +264,24 @@ export function attachSocket(io) {
           isAdmin: socket.data.isAdmin,
         });
 
-        const history = await getRecentMessages(guildId, 50);
-        ack?.({ ok: true, history, isGuildOwner: socket.data.isGuildOwner });
-        io.to(guildId).emit("presence:update", onlineList(guildId));
+        const channels = await getChannelsForGuild(guildId);
+        const firstText = channels.find((c) => c.type === "text");
+
+        let history = [];
+        if (firstText) {
+          socket.data.currentChannelId = firstText.id;
+          socket.join(channelRoom(firstText.id));
+          history = await getRecentMessages(firstText.id, 50);
+        }
+
+        ack?.({
+          ok: true,
+          channels,
+          currentChannelId: firstText?.id || null,
+          history,
+          isGuildOwner: socket.data.isGuildOwner,
+        });
+        io.to(guildRoom(guildId)).emit("presence:update", onlineList(guildId));
       } catch (err) {
         console.error("guild:switch failed", err);
         ack?.({ ok: false, error: "Falha ao trocar de servidor." });
@@ -253,6 +299,8 @@ export function attachSocket(io) {
         const id = uuidv4();
         await createGuild(id, cleanName, socket.data.userId);
         await addGuildMember(id, socket.data.userId);
+        await createChannel(uuidv4(), id, "geral", "text", null, 0);
+        await createChannel(uuidv4(), id, "Geral", "voice", null, 0);
         const code = generateInviteCode();
         await createInvite(code, id, socket.data.userId);
         ack?.({
@@ -308,11 +356,73 @@ export function attachSocket(io) {
       }
     });
 
-    // --- webhooks: só dono do servidor atual ou admin global ---
-    socket.on("webhook:create", async ({ name }, ack) => {
+    // --- canais: trocar de canal de texto, criar/apagar (dono/admin) ---
+
+    socket.on("channel:switch", async ({ channelId }, ack) => {
+      if (!socket.data.userId || !channelId) return;
+      try {
+        const channel = await getChannelById(channelId);
+        if (!channel || channel.guild_id !== socket.data.currentGuildId || channel.type !== "text") {
+          ack?.({ ok: false, error: "Canal inválido." });
+          return;
+        }
+        leaveCurrentChannel(socket);
+        socket.data.currentChannelId = channelId;
+        socket.join(channelRoom(channelId));
+        const history = await getRecentMessages(channelId, 50);
+        ack?.({ ok: true, history });
+      } catch (err) {
+        console.error("channel:switch failed", err);
+        ack?.({ ok: false, error: "Falha ao trocar de canal." });
+      }
+    });
+
+    socket.on("channel:create", async ({ name, type, category }, ack) => {
       const guildId = socket.data.currentGuildId;
       const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
       if (!canManage || !guildId) {
+        ack?.({ ok: false, error: "Só o dono do servidor cria canais." });
+        return;
+      }
+      const cleanType = type === "voice" ? "voice" : "text";
+      const cleanName = sanitizeChannelName(cleanType, name);
+      if (!cleanName) {
+        ack?.({ ok: false, error: "Nome do canal não pode ficar vazio." });
+        return;
+      }
+      try {
+        const id = uuidv4();
+        const cleanCategory = String(category || "").trim().slice(0, 40) || null;
+        await createChannel(id, guildId, cleanName, cleanType, cleanCategory, 0);
+        const channel = { id, guild_id: guildId, category: cleanCategory, name: cleanName, type: cleanType, position: 0 };
+        io.to(guildRoom(guildId)).emit("channel:created", channel);
+        ack?.({ ok: true, channel });
+      } catch (err) {
+        console.error("channel:create failed", err);
+        ack?.({ ok: false, error: "Falha ao criar canal." });
+      }
+    });
+
+    socket.on("channel:delete", async ({ channelId }, ack) => {
+      const guildId = socket.data.currentGuildId;
+      const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
+      if (!canManage || !guildId || !channelId) return;
+      try {
+        await deleteChannel(channelId, guildId);
+        io.to(guildRoom(guildId)).emit("channel:deleted", { id: channelId });
+        ack?.({ ok: true });
+      } catch (err) {
+        console.error("channel:delete failed", err);
+        ack?.({ ok: false, error: "Falha ao apagar canal." });
+      }
+    });
+
+    // --- webhooks: postam no canal que a pessoa está vendo agora ---
+    socket.on("webhook:create", async ({ name }, ack) => {
+      const guildId = socket.data.currentGuildId;
+      const channelId = socket.data.currentChannelId;
+      const canManage = socket.data.isAdmin || socket.data.isGuildOwner;
+      if (!canManage || !guildId || !channelId) {
         ack?.({ ok: false, error: "Só o dono do servidor cria webhooks." });
         return;
       }
@@ -320,7 +430,7 @@ export function attachSocket(io) {
         const cleanName = String(name || "Webhook").trim().slice(0, 40) || "Webhook";
         const id = uuidv4();
         const token = crypto.randomBytes(24).toString("base64url");
-        await createWebhook(id, token, guildId, cleanName, socket.data.userId);
+        await createWebhook(id, token, guildId, channelId, cleanName, socket.data.userId);
         ack?.({ ok: true, webhook: { id, token, name: cleanName } });
       } catch (err) {
         console.error("webhook:create failed", err);
@@ -352,11 +462,12 @@ export function attachSocket(io) {
       ack?.({ ok: true });
     });
 
-    // --- chat (escopado ao servidor que o socket está vendo agora) ---
+    // --- chat (escopado ao canal que o socket está vendo agora) ---
 
     socket.on("chat:message", async (content) => {
       const guildId = socket.data.currentGuildId;
-      if (!socket.data.userId || !guildId) return;
+      const channelId = socket.data.currentChannelId;
+      if (!socket.data.userId || !guildId || !channelId) return;
 
       const now = Date.now();
       socket.data.messageTimestamps = (socket.data.messageTimestamps || []).filter(
@@ -376,8 +487,8 @@ export function attachSocket(io) {
       socket.data.messageTimestamps.push(now);
 
       try {
-        const msg = await insertMessage(guildId, socket.data.userId, socket.data.nickname, trimmed);
-        io.to(guildId).emit("chat:message", msg);
+        const msg = await insertMessage(guildId, channelId, socket.data.userId, socket.data.nickname, trimmed);
+        io.to(channelRoom(channelId)).emit("chat:message", msg);
       } catch (err) {
         console.error("failed to save message", err);
       }
@@ -394,7 +505,7 @@ export function attachSocket(io) {
         if (!isOwner && !canModerate) return;
 
         await deleteMessage(messageId);
-        io.to(message.guild_id).emit("chat:message-deleted", { id: messageId });
+        io.to(channelRoom(message.channel_id)).emit("chat:message-deleted", { id: messageId });
 
         if (!isOwner) {
           await addAuditLog(
@@ -417,11 +528,11 @@ export function attachSocket(io) {
       if (!canModerate || !guildId || !targetUserId || targetUserId === socket.data.userId) return;
       if (isAdminNickname(targetNickname)) return; // admin não expulsa admin
 
-      const targets = socketsOf(guildId, targetUserId);
+      const targets = socketsInGuild(guildId, targetUserId);
       if (targets.length === 0) return;
 
       await addAuditLog(guildId, socket.data.nickname, "kick", targetNickname);
-      io.to(guildId).emit("chat:system", {
+      io.to(guildRoom(guildId)).emit("chat:system", {
         text: `👢 ${targetNickname} foi expulso por ${socket.data.nickname}.`,
       });
       targets.forEach((t) => {
@@ -438,10 +549,10 @@ export function attachSocket(io) {
 
       await banUser(guildId, targetUserId, socket.data.nickname);
       await addAuditLog(guildId, socket.data.nickname, "ban", targetNickname);
-      io.to(guildId).emit("chat:system", {
+      io.to(guildRoom(guildId)).emit("chat:system", {
         text: `🔨 ${targetNickname} foi banido por ${socket.data.nickname}.`,
       });
-      socketsOf(guildId, targetUserId).forEach((t) => {
+      socketsInGuild(guildId, targetUserId).forEach((t) => {
         t.emit("mod:banned");
         t.disconnect(true);
       });
@@ -450,15 +561,23 @@ export function attachSocket(io) {
     // --- sinalização WebRTC para a chamada de voz/vídeo em malha (mesh) ---
     // Quem entra por último é quem inicia a conexão com cada participante
     // já presente — evita os dois lados oferecendo ao mesmo tempo.
-    socket.on("voice:join", () => {
-      const guildId = socket.data.currentGuildId;
-      if (!socket.data.userId || !guildId) return;
-      if (!voiceRoom.has(guildId)) voiceRoom.set(guildId, new Map());
-      const room = voiceRoom.get(guildId);
+    socket.on("voice:join", async ({ channelId }) => {
+      if (!socket.data.userId || !channelId) return;
+      const channel = await getChannelById(channelId);
+      if (!channel || channel.guild_id !== socket.data.currentGuildId || channel.type !== "voice") return;
+
+      if (socket.data.currentVoiceChannelId && socket.data.currentVoiceChannelId !== channelId) {
+        leaveVoiceChannel(socket);
+      }
+
+      if (!voiceRoom.has(channelId)) voiceRoom.set(channelId, new Map());
+      const room = voiceRoom.get(channelId);
       const existingPeers = [...room.entries()].map(([socketId, v]) => ({ socketId, ...v }));
       room.set(socket.id, { userId: socket.data.userId, nickname: socket.data.nickname });
+      socket.data.currentVoiceChannelId = channelId;
+      socket.join(voiceChannelRoom(channelId));
       socket.emit("voice:existing-peers", existingPeers);
-      socket.to(guildId).emit("voice:roster", voiceRoster(guildId));
+      socket.to(voiceChannelRoom(channelId)).emit("voice:roster", voiceRoster(channelId));
     });
 
     socket.on("voice:signal", ({ to, description, candidate }) => {
@@ -474,15 +593,15 @@ export function attachSocket(io) {
     // Só um repasse de estado pra UI (quem tá compartilhando a tela agora) —
     // a faixa de vídeo em si viaja pela sinalização voice:signal acima.
     socket.on("voice:screen-share", ({ sharing }) => {
-      const guildId = socket.data.currentGuildId;
-      if (!guildId) return;
-      socket.to(guildId).emit("voice:screen-share", {
+      const channelId = socket.data.currentVoiceChannelId;
+      if (!channelId) return;
+      socket.to(voiceChannelRoom(channelId)).emit("voice:screen-share", {
         socketId: socket.id,
         sharing: !!sharing,
       });
     });
 
-    socket.on("voice:leave", () => leaveVoice(socket, socket.data.currentGuildId));
+    socket.on("voice:leave", () => leaveVoiceChannel(socket));
 
     socket.on("disconnect", () => {
       leaveCurrentGuild(socket);

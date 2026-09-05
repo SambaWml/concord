@@ -85,13 +85,13 @@ function ScreenTile({ stream, label, muted }) {
   );
 }
 
-export default function VoicePanel({ socket, myNickname }) {
-  const voice = useVoice(socket);
+export default function VoicePanel({ socket, channelId, myNickname }) {
+  const voice = useVoice(socket, channelId);
 
   if (!voice.joined) {
     return (
       <div className="voice-panel voice-panel--idle">
-        <p>Canal de voz Geral — ninguém precisa estar aqui pra você entrar.</p>
+        <p>Canal de voz — ninguém precisa estar aqui pra você entrar.</p>
         {voice.error && <div className="login-error">{voice.error}</div>}
         <button className="voice-join-btn" onClick={voice.join}>
           🔊 Entrar na chamada

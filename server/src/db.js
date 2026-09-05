@@ -26,6 +26,11 @@ export const createInvite = impl.createInvite;
 export const getInvite = impl.getInvite;
 export const getInviteForGuild = impl.getInviteForGuild;
 
+export const createChannel = impl.createChannel;
+export const getChannelsForGuild = impl.getChannelsForGuild;
+export const getChannelById = impl.getChannelById;
+export const deleteChannel = impl.deleteChannel;
+
 export const insertMessage = impl.insertMessage;
 export const getRecentMessages = impl.getRecentMessages;
 export const getMessageById = impl.getMessageById;

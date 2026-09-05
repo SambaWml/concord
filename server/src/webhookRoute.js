@@ -25,8 +25,8 @@ export function createWebhookRouter(io) {
       }
       const username = String(req.body?.username || webhook.name).trim().slice(0, 40) || webhook.name;
 
-      const msg = await insertMessage(webhook.guild_id, null, username, content, true);
-      io.to(webhook.guild_id).emit("chat:message", msg);
+      const msg = await insertMessage(webhook.guild_id, webhook.channel_id, null, username, content, true);
+      io.to(`c:${webhook.channel_id}`).emit("chat:message", msg);
       res.status(204).end();
     } catch (err) {
       console.error("webhook post failed", err);

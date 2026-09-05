@@ -6,9 +6,10 @@ Múltiplos servidores, cada um com seu próprio chat e chamada de voz/vídeo com
 
 - **Conta com apelido + senha:** primeira vez com um apelido, a senha digitada vira a senha da conta; da próxima vez, precisa da senha certa pra voltar com aquele nome (veja "Contas" abaixo)
 - **Múltiplos servidores:** crie o seu (ganha um código de convite na hora) ou entre num com o código de alguém — veja "Servidores" abaixo
-- Chat em tempo real no canal `#geral` de cada servidor, com histórico salvo em Postgres — fecha o navegador, entra de novo, as mensagens continuam lá
+- **Múltiplos canais por servidor**, organizados em categorias: quantos canais de texto e de voz o dono quiser criar, cada um com seu chat/chamada isolados dos outros
+- Chat em tempo real por canal, com histórico salvo em Postgres — fecha o navegador, entra de novo, as mensagens continuam lá
 - Lista de quem está online naquele servidor, atualizada em tempo real
-- Canal de voz "Geral" por servidor: qualquer um entra, fala, liga câmera se quiser — todo mundo conectado direto um no outro (WebRTC), sem servidor de mídia pago no meio
+- Canal de voz: qualquer um entra, fala, liga câmera se quiser — todo mundo conectado direto um no outro (WebRTC), sem servidor de mídia pago no meio
 - Supressão de ruído por IA (GTCRN) + realce de presença vocal (EQ/compressão), tudo processado no navegador
 - Compartilhar tela na chamada, com tela cheia e volume por pessoa
 - **Moderação:** o dono de um servidor modera só o que criou; quem está em `ADMIN_NICKNAMES` modera em todos — apagar mensagem, expulsar (temporário) ou banir (permanente, só naquele servidor) — veja "Definindo quem é admin" abaixo
@@ -23,6 +24,7 @@ Cada servidor é isolado: chat, chamada de voz e banimentos não vazam de um pro
 - **Entrar:** mesmo botão "+" → aba "Entrar com convite" → cola o código de 8 caracteres
 - Todo mundo cai automaticamente no servidor **Geral** ao criar a conta — é o servidor padrão da instalação, sem dono definido
 - O botão 👤+ no topo da lista de canais mostra (ou gera) o código de convite do servidor atual
+- O dono do servidor (ou admin global) vê botões **#+** e **🔊+** ao lado de cada categoria pra criar novos canais de texto/voz; canais aparecem em tempo real pra todo mundo
 
 ## Contas
 
@@ -55,8 +57,9 @@ Local: coloque isso no `server/.env`. No Render: **Environment** → adicionar e
 - **Sem e-mail/recuperação de senha:** esqueceu a senha, perde o apelido — não tem "esqueci minha senha" ainda. Pra um grupo pequeno de confiança, ok; pra escala maior, precisaria de recuperação de verdade.
 - **Ban ainda é best-effort:** agora que apelido tem senha, criar uma identidade nova exige escolher um apelido novo (não só limpar o navegador) — mais alto que antes, mas ainda não impede de vez quem realmente quiser voltar com outro nome.
 - **Sessão não sobrevive a restart do servidor:** cada redeploy no Render limpa as sessões em memória — todo mundo precisa digitar a senha de novo (a conta em si não se perde, só a sessão).
-- **Um canal de texto e um de voz por servidor:** por design, é o escopo deste MVP — múltiplos canais dentro do mesmo servidor fica pra depois.
 - **Convite não expira nem tem limite de usos:** qualquer um com o código entra, pra sempre. Sem revogar convite ainda.
+- **Sem cargos/permissões granulares:** hoje é só dono/admin vs. membro comum — sem cargos customizados nem permissão por canal.
+- **Sem reações, respostas, threads ou fóruns ainda:** mensagem é só texto simples, por enquanto.
 
 ## Rodando local
 

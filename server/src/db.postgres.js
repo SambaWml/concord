@@ -1,4 +1,5 @@
 import pg from "pg";
+import { randomUUID } from "node:crypto";
 
 const { Pool } = pg;
 
@@ -59,9 +60,22 @@ export async function initDb() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS channels (
+      id UUID PRIMARY KEY,
+      guild_id UUID REFERENCES guilds(id),
+      category TEXT,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS messages (
       id BIGSERIAL PRIMARY KEY,
       guild_id UUID REFERENCES guilds(id),
+      channel_id UUID REFERENCES channels(id),
       user_id UUID REFERENCES users(id),
       nickname TEXT NOT NULL,
       content TEXT NOT NULL,
@@ -70,10 +84,11 @@ export async function initDb() {
     );
   `);
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS guild_id UUID REFERENCES guilds(id);`);
+  await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS channel_id UUID REFERENCES channels(id);`);
   await pool.query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS via_webhook BOOLEAN NOT NULL DEFAULT false;`);
 
   await pool.query(`
-    CREATE INDEX IF NOT EXISTS messages_guild_created_idx ON messages (guild_id, created_at);
+    CREATE INDEX IF NOT EXISTS messages_channel_created_idx ON messages (channel_id, created_at);
   `);
 
   // tabela nova (instalação do zero) já nasce com a chave composta certa
@@ -116,11 +131,13 @@ export async function initDb() {
       id UUID PRIMARY KEY,
       token TEXT NOT NULL,
       guild_id UUID REFERENCES guilds(id),
+      channel_id UUID REFERENCES channels(id),
       name TEXT NOT NULL,
       created_by UUID REFERENCES users(id),
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
   `);
+  await pool.query(`ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS channel_id UUID REFERENCES channels(id);`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS friendships (
@@ -133,6 +150,7 @@ export async function initDb() {
   `);
 
   await ensureDefaultGuild();
+  await ensureDefaultChannels();
 }
 
 // Garante que sempre existe um servidor "Geral" — é onde todo mundo que já
@@ -144,8 +162,6 @@ async function ensureDefaultGuild() {
      ON CONFLICT (id) DO NOTHING`,
     [DEFAULT_GUILD_ID]
   );
-  // migra mensagens antigas (de antes de servidores existirem) pro Geral
-  await pool.query(`UPDATE messages SET guild_id = $1 WHERE guild_id IS NULL`, [DEFAULT_GUILD_ID]);
   // todo mundo que já tem uma conta vira membro do Geral, se ainda não for
   await pool.query(
     `INSERT INTO guild_members (guild_id, user_id)
@@ -153,6 +169,29 @@ async function ensureDefaultGuild() {
      ON CONFLICT (guild_id, user_id) DO NOTHING`,
     [DEFAULT_GUILD_ID]
   );
+}
+
+// Todo servidor precisa nascer com pelo menos um canal de texto e um de
+// voz — isso cobre servidores criados antes de canais múltiplos existirem
+// (inclusive migra as mensagens deles, que ficaram sem channel_id).
+async function ensureDefaultChannels() {
+  const { rows } = await pool.query(`
+    SELECT g.id FROM guilds g
+    WHERE NOT EXISTS (SELECT 1 FROM channels c WHERE c.guild_id = g.id)
+  `);
+  for (const g of rows) {
+    const textId = randomUUID();
+    const voiceId = randomUUID();
+    await pool.query(
+      `INSERT INTO channels (id, guild_id, name, type, position) VALUES
+       ($1, $2, 'geral', 'text', 0), ($3, $2, 'Geral', 'voice', 0)`,
+      [textId, g.id, voiceId]
+    );
+    await pool.query(
+      `UPDATE messages SET channel_id = $1 WHERE guild_id = $2 AND channel_id IS NULL`,
+      [textId, g.id]
+    );
+  }
 }
 
 export async function findUserByNickname(nickname) {
@@ -261,33 +300,63 @@ export async function getInviteForGuild(guildId) {
   return rows[0];
 }
 
-// --- mensagens (agora por servidor) ---
+// --- canais ---
 
-export async function insertMessage(guildId, userId, nickname, content, viaWebhook = false) {
+export async function createChannel(id, guildId, name, type, category = null, position = 0) {
+  await pool.query(
+    `INSERT INTO channels (id, guild_id, name, type, category, position) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, guildId, name, type, category, position]
+  );
+}
+
+export async function getChannelsForGuild(guildId) {
   const { rows } = await pool.query(
-    `INSERT INTO messages (guild_id, user_id, nickname, content, via_webhook)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, guild_id, user_id, nickname, content, via_webhook, created_at`,
-    [guildId, userId, nickname, content, viaWebhook]
+    `SELECT id, guild_id, category, name, type, position FROM channels
+     WHERE guild_id = $1 ORDER BY category NULLS FIRST, position, name`,
+    [guildId]
+  );
+  return rows;
+}
+
+export async function getChannelById(id) {
+  const { rows } = await pool.query(
+    `SELECT id, guild_id, category, name, type, position FROM channels WHERE id = $1`,
+    [id]
   );
   return rows[0];
 }
 
-export async function getRecentMessages(guildId, limit = 50) {
+export async function deleteChannel(id, guildId) {
+  await pool.query(`DELETE FROM channels WHERE id = $1 AND guild_id = $2`, [id, guildId]);
+}
+
+// --- mensagens (agora por canal) ---
+
+export async function insertMessage(guildId, channelId, userId, nickname, content, viaWebhook = false) {
   const { rows } = await pool.query(
-    `SELECT id, guild_id, user_id, nickname, content, via_webhook, created_at
+    `INSERT INTO messages (guild_id, channel_id, user_id, nickname, content, via_webhook)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, guild_id, channel_id, user_id, nickname, content, via_webhook, created_at`,
+    [guildId, channelId, userId, nickname, content, viaWebhook]
+  );
+  return rows[0];
+}
+
+export async function getRecentMessages(channelId, limit = 50) {
+  const { rows } = await pool.query(
+    `SELECT id, guild_id, channel_id, user_id, nickname, content, via_webhook, created_at
      FROM messages
-     WHERE guild_id = $1
+     WHERE channel_id = $1
      ORDER BY created_at DESC
      LIMIT $2`,
-    [guildId, limit]
+    [channelId, limit]
   );
   return rows.reverse();
 }
 
 export async function getMessageById(id) {
   const { rows } = await pool.query(
-    `SELECT id, guild_id, user_id, nickname, content FROM messages WHERE id = $1`,
+    `SELECT id, guild_id, channel_id, user_id, nickname, content FROM messages WHERE id = $1`,
     [id]
   );
   return rows[0];
@@ -396,16 +465,16 @@ export async function getOutgoingRequests(userId) {
 
 // --- webhooks ---
 
-export async function createWebhook(id, token, guildId, name, createdBy) {
+export async function createWebhook(id, token, guildId, channelId, name, createdBy) {
   await pool.query(
-    `INSERT INTO webhooks (id, token, guild_id, name, created_by) VALUES ($1, $2, $3, $4, $5)`,
-    [id, token, guildId, name, createdBy]
+    `INSERT INTO webhooks (id, token, guild_id, channel_id, name, created_by) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [id, token, guildId, channelId, name, createdBy]
   );
 }
 
 export async function getWebhook(id, token) {
   const { rows } = await pool.query(
-    `SELECT id, token, guild_id, name FROM webhooks WHERE id = $1 AND token = $2`,
+    `SELECT id, token, guild_id, channel_id, name FROM webhooks WHERE id = $1 AND token = $2`,
     [id, token]
   );
   return rows[0];

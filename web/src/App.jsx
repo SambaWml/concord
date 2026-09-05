@@ -26,6 +26,16 @@ function emitAsync(event, payload) {
   return new Promise((resolve) => socket.emit(event, payload, resolve));
 }
 
+function groupChannelsByCategory(channels) {
+  const groups = {};
+  for (const c of channels) {
+    const key = c.category || "null";
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(c);
+  }
+  return groups;
+}
+
 let systemMsgSeq = 0;
 
 export default function App() {
@@ -33,6 +43,9 @@ export default function App() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [guilds, setGuilds] = useState([]);
   const [currentGuildId, setCurrentGuildId] = useState(null);
+  const [channels, setChannels] = useState([]);
+  const [currentChannelId, setCurrentChannelId] = useState(null);
+  const [activeVoiceChannelId, setActiveVoiceChannelId] = useState(null);
   const [isGuildOwner, setIsGuildOwner] = useState(false);
   const [status, setStatus] = useState("connecting"); // connecting | online | offline
   const [error, setError] = useState("");
@@ -76,6 +89,9 @@ export default function App() {
     setIsAdmin(false);
     setGuilds([]);
     setCurrentGuildId(null);
+    setChannels([]);
+    setCurrentChannelId(null);
+    setActiveVoiceChannelId(null);
     setMessages([]);
     setOnline([]);
     setInviteCode(null);
@@ -94,13 +110,36 @@ export default function App() {
     }
     setCurrentGuildId(guildId);
     setIsGuildOwner(!!res.isGuildOwner);
+    setChannels(res.channels || []);
+    setCurrentChannelId(res.currentChannelId || null);
+    setActiveVoiceChannelId(null);
     setMessages(res.history || []);
     setInviteCode(null);
+    setShowWebhooks(false);
     setIdentity((prev) => {
       const next = { ...prev, lastGuildId: guildId };
       saveIdentity(next);
       return next;
     });
+  }
+
+  async function switchChannel(channelId) {
+    if (!channelId || channelId === currentChannelId) return;
+    const res = await emitAsync("channel:switch", { channelId });
+    if (!res?.ok) {
+      setError(res?.error || "Não foi possível entrar nesse canal.");
+      return;
+    }
+    setCurrentChannelId(channelId);
+    setMessages(res.history || []);
+  }
+
+  async function createChannel(type) {
+    const name = window.prompt(type === "voice" ? "Nome do canal de voz:" : "Nome do canal de texto:");
+    if (!name) return;
+    const category = window.prompt("Categoria (opcional, deixe em branco pra nenhuma):", "") || null;
+    const res = await emitAsync("channel:create", { name, type, category });
+    if (!res?.ok) setError(res?.error || "Não foi possível criar o canal.");
   }
 
   function enter(nickname, password) {
@@ -172,6 +211,14 @@ export default function App() {
     function onFriendRemoved({ id }) {
       setFriends((prev) => prev.filter((f) => f.id !== id));
     }
+    function onChannelCreated(channel) {
+      setChannels((prev) => (prev.some((c) => c.id === channel.id) ? prev : [...prev, channel]));
+    }
+    function onChannelDeleted({ id }) {
+      setChannels((prev) => prev.filter((c) => c.id !== id));
+      setCurrentChannelId((prev) => (prev === id ? null : prev));
+      setActiveVoiceChannelId((prev) => (prev === id ? null : prev));
+    }
     function onGuildAdded(guild) {
       setGuilds((prev) => (prev.some((g) => g.id === guild.id) ? prev : [...prev, guild]));
       systemMsgSeq += 1;
@@ -198,6 +245,8 @@ export default function App() {
     socket.on("friend:accepted", onFriendAccepted);
     socket.on("friend:removed", onFriendRemoved);
     socket.on("guild:added", onGuildAdded);
+    socket.on("channel:created", onChannelCreated);
+    socket.on("channel:deleted", onChannelDeleted);
 
     return () => {
       socket.off("chat:message", onMessage);
@@ -212,6 +261,8 @@ export default function App() {
       socket.off("friend:accepted", onFriendAccepted);
       socket.off("friend:removed", onFriendRemoved);
       socket.off("guild:added", onGuildAdded);
+      socket.off("channel:created", onChannelCreated);
+      socket.off("channel:deleted", onChannelDeleted);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [identity]);
@@ -365,10 +416,44 @@ export default function App() {
             </button>
           </div>
         )}
-        <div className="channel-group-label">Canais de texto</div>
-        <div className="channel channel--active"># geral</div>
-        <div className="channel-group-label">Canais de voz</div>
-        <div className="channel">🔊 Geral</div>
+        <div className="channel-scroll">
+          {Object.entries(groupChannelsByCategory(channels)).map(([category, group]) => (
+            <div key={category}>
+              <div className="channel-group-label">
+                {category === "null" ? "Canais" : category}
+                {canModerate && (
+                  <span className="channel-add-buttons">
+                    <button title="Criar canal de texto" onClick={() => createChannel("text")}>
+                      #+
+                    </button>
+                    <button title="Criar canal de voz" onClick={() => createChannel("voice")}>
+                      🔊+
+                    </button>
+                  </span>
+                )}
+              </div>
+              {group.map((c) =>
+                c.type === "text" ? (
+                  <button
+                    key={c.id}
+                    className={"channel" + (c.id === currentChannelId ? " channel--active" : "")}
+                    onClick={() => switchChannel(c.id)}
+                  >
+                    # {c.name}
+                  </button>
+                ) : (
+                  <button
+                    key={c.id}
+                    className={"channel" + (c.id === activeVoiceChannelId ? " channel--active" : "")}
+                    onClick={() => setActiveVoiceChannelId(c.id)}
+                  >
+                    🔊 {c.name}
+                  </button>
+                )
+              )}
+            </div>
+          ))}
+        </div>
 
         <div className="online-panel">
           <div className="channel-group-label">
@@ -406,8 +491,13 @@ export default function App() {
       </aside>
 
       <main className="main-area">
-        {currentGuildId && (
-          <VoicePanel key={currentGuildId} socket={socket} myNickname={identity.nickname} />
+        {activeVoiceChannelId && (
+          <VoicePanel
+            key={activeVoiceChannelId}
+            socket={socket}
+            channelId={activeVoiceChannelId}
+            myNickname={identity.nickname}
+          />
         )}
         <Chat
           messages={messages}

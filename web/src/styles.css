@@ -260,20 +260,60 @@ input {
   flex-shrink: 0;
 }
 
+.channel-scroll {
+  flex: 1;
+  overflow-y: auto;
+}
+
 .channel-group-label {
   padding: 14px 14px 4px;
   font-size: 0.7rem;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--ink-muted);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.channel-add-buttons {
+  display: flex;
+  gap: 2px;
+}
+
+.channel-add-buttons button {
+  background: none;
+  color: var(--ink-muted);
+  font-size: 0.68rem;
+  padding: 2px 4px;
+  border-radius: 4px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.channel-add-buttons button:hover {
+  color: var(--accent);
+  background: var(--surface-2);
 }
 
 .channel {
+  display: block;
+  width: calc(100% - 16px);
+  text-align: left;
+  background: none;
   margin: 1px 8px;
   padding: 7px 10px;
   border-radius: 6px;
   font-size: 0.88rem;
   color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.channel:hover {
+  background: var(--surface-2);
+  color: var(--ink);
 }
 
 .channel--active {

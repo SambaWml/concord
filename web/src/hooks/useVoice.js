@@ -38,7 +38,7 @@ function tuneVideoSender(sender, { maxBitrate, degradationPreference = "maintain
   }
 }
 
-export function useVoice(socket) {
+export function useVoice(socket, channelId) {
   const [joined, setJoined] = useState(false);
   const [localStream, setLocalStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState({}); // socketId -> MediaStream (câmera/mic)
@@ -254,13 +254,13 @@ export function useVoice(socket) {
       setLocalStream(ns.stream);
       setMuted(false);
       setCameraOn(false);
-      socket.emit("voice:join");
+      socket.emit("voice:join", { channelId });
       setJoined(true);
     } catch (err) {
       console.error(err);
       setError("Não foi possível acessar seu microfone.");
     }
-  }, [socket]);
+  }, [socket, channelId]);
 
   const stopScreenShare = useCallback(() => {
     screenStreamRef.current?.getTracks().forEach((t) => t.stop());
